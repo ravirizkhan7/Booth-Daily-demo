@@ -1,0 +1,45 @@
+{
+  "name": "booth_daily",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port=3000 --host=0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist server.js",
+    "lint": "tsc --noEmit",
+    "validate:mock": "tsx src/mock/validation/validateMockData.ts",
+    "validate:phase2": "tsx src/mock/validation/validatePhase2.ts",
+    "validate:phase3": "tsx src/mock/validation/validatePhase3.ts",
+    "validate:phase4": "tsx src/mock/validation/validatePhase4.ts",
+    "validate:phase5": "tsx src/mock/validation/validatePhase5.ts"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.0.5",
+    "axios": "^1.19.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "laravel-echo": "^2.4.0",
+    "lucide-react": "^1.31.0",
+    "pusher-js": "^8.6.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-easy-crop": "^6.2.3",
+    "react-router-dom": "^7.18.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "autoprefixer": "^10.5.4",
+    "esbuild": "^0.28.2",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.12",
+    "typescript": "~7.0.2",
+    "vite": "^8.2.1",
+    "ws": "^8.21.3"
+  }
+}

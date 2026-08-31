@@ -1,0 +1,40 @@
+import { User } from '../../types';
+
+export const initialUsers: User[] = [
+  {
+    id: 'usr-owner-01',
+    name: 'Hendro Wijaya',
+    username: 'hendro',
+    email: 'owner@boothdaily.com',
+    password: 'demo123',
+    role: 'owner',
+    pin: '1234',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+    is_active: true,
+    phone: '081234567890',
+  },
+  {
+    id: 'usr-karyawan-01',
+    name: 'Dinda Lestari',
+    username: 'dinda',
+    email: 'dinda@boothdaily.com',
+    password: 'demo123',
+    role: 'karyawan',
+    pin: '5678',
+    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=200&auto=format&fit=crop&q=80',
+    is_active: true,
+    phone: '081298765432',
+  },
+  {
+    id: 'usr-karyawan-02',
+    name: 'Budi Santoso',
+    username: 'budi',
+    email: 'budi@boothdaily.com',
+    password: 'demo123',
+    role: 'karyawan',
+    pin: '9012',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80',
+    is_active: true,
+    phone: '081311223344',
+  },
+];
