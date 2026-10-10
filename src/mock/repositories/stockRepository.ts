@@ -23,8 +23,12 @@ export const stockRepository = {
     return mockStore.addStock(stockData);
   },
 
-  async updateStock(id: string, stockData: Partial<Stock>): Promise<Stock> {
-    return mockStore.updateStock(id, stockData);
+  async updateStock(
+    id: string,
+    stockData: Partial<Stock>,
+    metadata?: { notes?: string; user_name?: string }
+  ): Promise<Stock> {
+    return mockStore.updateStock(id, stockData, metadata);
   },
 
   async deleteStock(id: string): Promise<boolean> {
@@ -35,9 +39,10 @@ export const stockRepository = {
     stockId: string,
     changeAmount: number,
     reason: string,
-    userName: string = 'Owner'
+    userName: string = 'Owner',
+    notes?: string
   ): Promise<Stock> {
-    return mockStore.adjustStock(stockId, changeAmount, reason, userName);
+    return mockStore.adjustStock(stockId, changeAmount, reason, userName, notes);
   },
 
   async createPurchase(purchaseData: Omit<Purchase, 'id'>): Promise<Purchase> {

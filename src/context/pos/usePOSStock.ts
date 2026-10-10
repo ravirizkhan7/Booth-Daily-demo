@@ -45,8 +45,15 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
     return newStock;
   };
 
-  const editStockItem = async (id: string, stockData: Partial<Stock>) => {
-    const updated = await stockService.updateStock(id, stockData);
+  const editStockItem = async (
+    id: string,
+    stockData: Partial<Stock>,
+    metadata?: { notes?: string }
+  ) => {
+    const updated = await stockService.updateStock(id, stockData, {
+      notes: metadata?.notes,
+      user_name: currentUser ? currentUser.name : 'Owner',
+    });
     const normalized: Stock = {
       id: String(updated.id),
       name: updated.name,
@@ -88,9 +95,14 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
     return success;
   };
 
-  const adjustStockQuantity = async (stockId: string, changeAmount: number, reason: string) => {
+  const adjustStockQuantity = async (
+    stockId: string,
+    changeAmount: number,
+    reason: string,
+    notes?: string
+  ) => {
     const userName = currentUser ? currentUser.name : 'Owner';
-    const updated = await stockService.adjustStock(stockId, changeAmount, reason, userName);
+    const updated = await stockService.adjustStock(stockId, changeAmount, reason, userName, notes);
     const normalized: Stock = {
       id: String(updated.id),
       name: updated.name,

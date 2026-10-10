@@ -132,9 +132,29 @@ ${settings.receipt_footer}
                 </span>
               </div>
               {isRefunded && (
-                <div className="flex justify-between text-rose-600 font-bold">
-                  <span>Status:</span>
-                  <span className="uppercase">DIREFUND</span>
+                <div className="space-y-1 pt-1.5 border-t border-dashed border-rose-200">
+                  <div className="flex justify-between text-rose-600 font-bold">
+                    <span>Status:</span>
+                    <span className="uppercase">DIREFUND</span>
+                  </div>
+                  {currentReceiptOrder.refunded_by_name && (
+                    <div className="flex justify-between text-rose-600 text-xs">
+                      <span className="text-stone-500">Refund Oleh:</span>
+                      <span className="font-semibold">{currentReceiptOrder.refunded_by_name}</span>
+                    </div>
+                  )}
+                  {currentReceiptOrder.refund_reason && (
+                    <div className="flex justify-between text-rose-600 text-xs">
+                      <span className="text-stone-500">Alasan:</span>
+                      <span className="font-semibold">{currentReceiptOrder.refund_reason}</span>
+                    </div>
+                  )}
+                  {currentReceiptOrder.refunded_at && (
+                    <div className="flex justify-between text-rose-600 text-xs">
+                      <span className="text-stone-500">Tanggal:</span>
+                      <span>{formatDate(currentReceiptOrder.refunded_at)}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -12,9 +12,16 @@ export interface UsePOSOrdersProps {
 export const usePOSOrders = ({ currentUser, onStockChange, showToast }: UsePOSOrdersProps) => {
   const [orders, setOrders] = useState<Order[]>([]);
 
-  const refundOrder = async (orderId: string): Promise<{ success: boolean; message: string; order?: Order }> => {
+  const refundOrder = async (
+    orderId: string,
+    metadata?: { refunded_by_name?: string; refund_reason?: string }
+  ): Promise<{ success: boolean; message: string; order?: Order }> => {
     try {
-      const updatedOrder = await orderService.refundOrder(orderId);
+      const meta = {
+        refunded_by_name: currentUser?.role === 'owner' ? 'Owner' : (currentUser as any)?.name || 'Owner',
+        ...metadata,
+      };
+      const updatedOrder = await orderService.refundOrder(orderId, meta);
       setOrders(prev => prev.map(o => String(o.id) === String(orderId) ? updatedOrder : o));
 
       try {

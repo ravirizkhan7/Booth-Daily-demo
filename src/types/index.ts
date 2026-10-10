@@ -71,10 +71,13 @@ export interface StockHistory {
   stock_name: string;
   change_amount: number;
   unit: string;
-  type: 'pembelian' | 'penjualan' | 'penyesuaian' | 'edit_manual' | 'in' | 'out' | 'sale_deduction';
+  type: 'pembelian' | 'penjualan' | 'refund' | 'penyesuaian' | 'edit_manual' | 'in' | 'out' | 'sale_deduction';
   reference: string;
   user_name?: string;
+  initial_amount?: number;
   final_amount?: number;
+  reason?: string;
+  notes?: string;
   created_at: string;
 }
 
@@ -147,6 +150,9 @@ export interface Order {
   payment: Payment;
   items: OrderItem[];
   customer_name?: string;
+  refunded_at?: string;
+  refunded_by_name?: string;
+  refund_reason?: string;
   created_at: string;
 }
 

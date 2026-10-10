@@ -81,6 +81,13 @@ export const DashboardPage: React.FC = () => {
     return orders.filter(order => order.payment?.status !== 'refunded');
   }, [orders]);
 
+  const todayAllOrders = useMemo(() => {
+    return orders.filter(order => {
+      const orderDate = parseOrderDate(order.created_at);
+      return orderDate ? getLocalDateKey(orderDate) === todayKey : false;
+    });
+  }, [orders, todayKey]);
+
   const todayOrders = useMemo(() => {
     return completedOrders.filter(order => {
       const orderDate = parseOrderDate(order.created_at);
@@ -98,8 +105,9 @@ export const DashboardPage: React.FC = () => {
   const todayCount = todayOrders.length;
 
   const todayGrossProfit = useMemo(() => {
-    return todayOrders.reduce((sum, order) => {
-      const orderCost = order.items.reduce((itemSum, item) => {
+    // Total HPP mencakup seluruh order yang dibuat hari ini (termasuk yang direfund karena bahan fisik sudah terpakai)
+    const todayTotalCost = todayAllOrders.reduce((sum, order) => {
+      const orderCost = (order.items || []).reduce((itemSum, item) => {
         const prod = products.find(p => p.id === item.product_id);
         const unitCost = prod
           ? Number(prod.cost_price || 0)
@@ -108,9 +116,11 @@ export const DashboardPage: React.FC = () => {
         return itemSum + unitCost * item.qty;
       }, 0);
 
-      return sum + (Number(order.total_amount || 0) - orderCost);
+      return sum + orderCost;
     }, 0);
-  }, [todayOrders, products]);
+
+    return todayRevenue - todayTotalCost;
+  }, [todayAllOrders, todayRevenue, products]);
 
   const lowStockItems = stocks.filter(
     stock => stock.current_amount <= stock.min_amount

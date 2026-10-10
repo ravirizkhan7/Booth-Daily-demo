@@ -338,20 +338,57 @@ export class MockStore {
     return deepClone(newStock);
   }
 
-  public updateStock(id: string, stockData: Partial<Stock>): Stock {
+  public updateStock(
+    id: string,
+    stockData: Partial<Stock>,
+    metadata?: { notes?: string; user_name?: string }
+  ): Stock {
     const index = this.state.stocks.findIndex(s => String(s.id) === String(id));
     if (index === -1) {
       throw new Error(`Stock with ID ${id} not found`);
     }
+    const currentStock = this.state.stocks[index];
+    const prevAmount = currentStock.current_amount;
+    const hasNewAmount = stockData.current_amount !== undefined && stockData.current_amount !== null;
+    const newAmount = hasNewAmount ? Number(stockData.current_amount) : prevAmount;
+
+    if (newAmount < 0) {
+      throw new Error('Jumlah stok tidak boleh negatif');
+    }
+
     const updated: Stock = {
-      ...this.state.stocks[index],
+      ...currentStock,
       ...stockData,
-      id: this.state.stocks[index].id,
-      current_amount: stockData.current_amount !== undefined ? Number(stockData.current_amount) : this.state.stocks[index].current_amount,
-      min_amount: stockData.min_amount !== undefined ? Number(stockData.min_amount) : this.state.stocks[index].min_amount,
-      cost_per_unit: stockData.cost_per_unit !== undefined ? Number(stockData.cost_per_unit) : this.state.stocks[index].cost_per_unit,
+      id: currentStock.id,
+      current_amount: newAmount,
+      min_amount: stockData.min_amount !== undefined ? Number(stockData.min_amount) : currentStock.min_amount,
+      cost_per_unit: stockData.cost_per_unit !== undefined ? Number(stockData.cost_per_unit) : currentStock.cost_per_unit,
     };
     this.state.stocks[index] = updated;
+
+    // Record history ONLY if quantity actually changed
+    if (hasNewAmount && newAmount !== prevAmount) {
+      const changeAmount = Math.round((newAmount - prevAmount) * 1000) / 1000;
+      const notes = metadata?.notes?.trim() || 'Edit kuantitas stok manual';
+      const userName = metadata?.user_name?.trim() || 'Owner';
+      const historyEntry: StockHistory = {
+        id: `sth-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        stock_id: updated.id,
+        stock_name: updated.name,
+        initial_amount: prevAmount,
+        change_amount: changeAmount,
+        final_amount: newAmount,
+        unit: updated.unit,
+        type: 'edit_manual',
+        reason: 'Edit Manual Kuantitas',
+        notes: notes,
+        reference: `Edit Manual Kuantitas — ${notes}`,
+        user_name: userName,
+        created_at: new Date().toISOString(),
+      };
+      this.state.stockHistories.unshift(historyEntry);
+    }
+
     this.persist();
     return deepClone(updated);
   }
@@ -374,30 +411,38 @@ export class MockStore {
     stockId: string,
     changeAmount: number,
     reason: string,
-    userName: string = 'Owner'
+    userName: string = 'Owner',
+    notes?: string
   ): Stock {
     const index = this.state.stocks.findIndex(s => String(s.id) === String(stockId));
     if (index === -1) {
       throw new Error(`Stock with ID ${stockId} not found`);
     }
     const stock = this.state.stocks[index];
-    if (stock.current_amount + changeAmount < 0) {
+    const prevAmount = stock.current_amount;
+    if (prevAmount + changeAmount < 0) {
       throw new Error('Penyesuaian gagal: stok tidak boleh menjadi negatif');
     }
-    const newAmount = stock.current_amount + changeAmount;
+    const newAmount = Math.round((prevAmount + changeAmount) * 1000) / 1000;
     stock.current_amount = newAmount;
+
+    const trimmedNotes = notes?.trim();
+    const reference = trimmedNotes ? `${reason} — ${trimmedNotes}` : reason;
 
     // Record stock history entry
     const historyEntry: StockHistory = {
       id: `sth-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       stock_id: stock.id,
       stock_name: stock.name,
+      initial_amount: prevAmount,
       change_amount: changeAmount,
+      final_amount: newAmount,
       unit: stock.unit,
       type: 'penyesuaian',
-      reference: reason,
+      reason: reason,
+      notes: trimmedNotes,
+      reference: reference,
       user_name: userName,
-      final_amount: newAmount,
       created_at: new Date().toISOString(),
     };
     this.state.stockHistories.unshift(historyEntry);
@@ -683,7 +728,10 @@ export class MockStore {
     return deepClone(updated);
   }
 
-  public refundOrder(id: string): Order {
+  public refundOrder(
+    id: string,
+    metadata?: { refunded_by_name?: string; refund_reason?: string }
+  ): Order {
     const index = this.state.orders.findIndex(o => String(o.id) === String(id));
     if (index === -1) {
       throw new Error(`Order with ID ${id} not found`);
@@ -696,36 +744,31 @@ export class MockStore {
       order.payment.status = 'refunded';
     }
 
-    // Revert stock consumption
-    if (Array.isArray(order.items)) {
-      order.items.forEach(item => {
-        const recipe = this.state.recipes.find(
-          r => String(r.product_id) === String(item.product_id)
-        );
-        if (recipe && Array.isArray(recipe.ingredients)) {
-          recipe.ingredients.forEach(ing => {
-            const stockIndex = this.state.stocks.findIndex(
-              s => String(s.id) === String(ing.stock_id)
-            );
-            if (stockIndex !== -1) {
-              const returned = ing.amount * item.qty;
-              this.state.stocks[stockIndex].current_amount += returned;
+    // Record audit trail
+    order.refunded_at = new Date().toISOString();
+    if (metadata?.refunded_by_name) {
+      order.refunded_by_name = metadata.refunded_by_name;
+    }
+    if (metadata?.refund_reason) {
+      order.refund_reason = metadata.refund_reason;
+    }
 
-              // Add refund mutation log
-              this.state.stockHistories.unshift({
-                id: `sth-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-                stock_id: this.state.stocks[stockIndex].id,
-                stock_name: this.state.stocks[stockIndex].name,
-                change_amount: returned,
-                unit: this.state.stocks[stockIndex].unit,
-                type: 'penyesuaian',
-                reference: `Refund Pesanan #${order.order_number}`,
-                user_name: 'Owner',
-                final_amount: this.state.stocks[stockIndex].current_amount,
-                created_at: new Date().toISOString(),
-              });
-            }
-          });
+    // BUSINESS RULE: Consumed recipe ingredients MUST NOT be returned to stock!
+    // Stock quantity is retained without mutation (no +returned, no double deduction).
+    // Instead, update existing consumption history entries for this order from 'penjualan' to 'refund'.
+    const orderNum = order.order_number;
+    if (orderNum && Array.isArray(this.state.stockHistories)) {
+      this.state.stockHistories.forEach(h => {
+        if (h.reference && h.reference.includes(orderNum)) {
+          h.type = 'refund';
+          if (h.reference.startsWith('Penjualan #')) {
+            h.reference = h.reference.replace('Penjualan #', 'Refund Penjualan #');
+          } else if (!h.reference.startsWith('Refund Penjualan')) {
+            h.reference = `Refund Penjualan #${orderNum}`;
+          }
+          if (metadata?.refunded_by_name) {
+            h.user_name = metadata.refunded_by_name;
+          }
         }
       });
     }

@@ -16,7 +16,7 @@ export const orderService = {
     return orderRepository.createOrder(orderData, token);
   },
 
-  async refundOrder(id: string): Promise<Order> {
-    return orderRepository.refundOrder(id);
+  async refundOrder(id: string, metadata?: { refunded_by_name?: string; refund_reason?: string }): Promise<Order> {
+    return orderRepository.refundOrder(id, metadata);
   },
 };

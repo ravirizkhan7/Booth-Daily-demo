@@ -7,3 +7,26 @@
 * {
     scrollbar-width: none;
 }
+
+.custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(212, 163, 115, 0.6) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    display: block;
+    width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(212, 163, 115, 0.6);
+    border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #D4A373;
+}

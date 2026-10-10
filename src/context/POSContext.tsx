@@ -84,9 +84,9 @@ interface POSContextType {
 
   // Stock
   addStockItem: (stockData: Omit<Stock, 'id'>) => Promise<Stock>;
-  editStockItem: (id: string, stockData: Partial<Stock>) => Promise<Stock>;
+  editStockItem: (id: string, stockData: Partial<Stock>, metadata?: { notes?: string }) => Promise<Stock>;
   removeStockItem: (id: string) => Promise<boolean>;
-  adjustStockQuantity: (stockId: string, changeAmount: number, reason: string) => Promise<Stock>;
+  adjustStockQuantity: (stockId: string, changeAmount: number, reason: string, notes?: string) => Promise<Stock>;
 
   // Purchase
   addPurchase: (purchaseData: Omit<Purchase, 'id'>) => Promise<Purchase>;
@@ -110,7 +110,7 @@ interface POSContextType {
   openPinModal: () => void;
   closePinModal: () => void;
   processPaymentWithPin: (pin: string, paymentMethod: PaymentMethod, amountPaid: number) => Promise<{ success: boolean; message: string; order?: Order }>;
-  refundOrder: (orderId: string) => Promise<{ success: boolean; message: string; order?: Order }>;
+  refundOrder: (orderId: string, metadata?: { refunded_by_name?: string; refund_reason?: string }) => Promise<{ success: boolean; message: string; order?: Order }>;
 
   // Receipt Modal
   currentReceiptOrder: Order | null;

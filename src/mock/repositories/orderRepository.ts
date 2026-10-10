@@ -23,7 +23,7 @@ export const orderRepository = {
     return mockStore.addOrder(orderData);
   },
 
-  async refundOrder(id: string): Promise<Order> {
-    return mockStore.refundOrder(id);
+  async refundOrder(id: string, metadata?: { refunded_by_name?: string; refund_reason?: string }): Promise<Order> {
+    return mockStore.refundOrder(id, metadata);
   },
 };

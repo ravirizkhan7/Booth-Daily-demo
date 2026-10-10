@@ -11,7 +11,7 @@ import { Order } from '../types';
 import { computeReportData, DateFilterType } from '../utils/reportUtils';
 
 export const ReportsPage: React.FC = () => {
-  const { orders, products, stocks, purchases, recipes, settings, currentUser, showToast } = usePOS();
+  const { orders, products, stocks, purchases, recipes, settings, currentUser, showToast, openReceiptModal } = usePOS();
 
   const [dateFilter, setDateFilter] = useState<DateFilterType>('month');
   const [activeTab, setActiveTab] = useState<'all' | 'sales' | 'purchases' | 'transactions'>('all');
@@ -662,7 +662,7 @@ export const ReportsPage: React.FC = () => {
           </div>
 
           <div className="overflow-x-auto max-h-[480px]">
-            <table className="w-full text-left text-xs min-w-[700px]">
+            <table className="w-full text-left text-xs min-w-[750px]">
               <thead className="bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="p-3">No. Pesanan</th>
@@ -670,55 +670,95 @@ export const ReportsPage: React.FC = () => {
                   <th className="p-3">Kasir</th>
                   <th className="p-3">Tipe</th>
                   <th className="p-3">Pembayaran</th>
+                  <th className="p-3">Status</th>
                   <th className="p-3 text-right">Subtotal</th>
                   <th className="p-3 text-right">Total Akhir</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100 dark:divide-stone-800 font-medium">
-                {reportData.filteredOrders.length === 0 ? (
+                {reportData.transactionDetailOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-6 text-center text-stone-400 font-semibold">
+                    <td colSpan={8} className="p-6 text-center text-stone-400 font-semibold">
                       Belum ada transaksi penjualan pada periode ini.
                     </td>
                   </tr>
                 ) : (
-                  reportData.filteredOrders.map(o => (
-                    <tr key={o.id} className="hover:bg-stone-50 dark:hover:bg-[#25221F] transition-colors">
-                      <td className="p-3 font-extrabold text-stone-900 dark:text-stone-100 text-xs">
-                        {o.order_number}
-                      </td>
-                      <td className="p-3 text-stone-600 dark:text-stone-300 font-medium">
-                        {formatDate(o.created_at)}
-                      </td>
-                      <td className="p-3 text-stone-700 dark:text-stone-300 font-semibold">
-                        {o.created_by_name || 'Kasir'}
-                      </td>
-                      <td className="p-3">
-                        <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${o.order_type === 'take_away'
-                          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                          : 'bg-blue-500/10 text-blue-700 dark:text-blue-400'
+                  reportData.transactionDetailOrders.map(o => {
+                    const isRefunded = o.payment?.status === 'refunded';
+                    return (
+                      <tr
+                        key={o.id}
+                        onClick={() => openReceiptModal(o)}
+                        className={`hover:bg-stone-50 dark:hover:bg-[#25221F] transition-colors cursor-pointer ${
+                          isRefunded ? 'bg-rose-50/40 dark:bg-rose-950/15' : ''
+                        }`}
+                        title="Klik untuk melihat detail struk"
+                      >
+                        <td className="p-3 font-extrabold text-stone-900 dark:text-stone-100 text-xs">
+                          <div>{o.order_number}</div>
+                          {isRefunded && o.refund_reason && (
+                            <div className="text-[10px] text-rose-500 dark:text-rose-400 font-medium mt-0.5">
+                              Alasan: {o.refund_reason}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-3 text-stone-600 dark:text-stone-300 font-medium">
+                          {formatDate(o.created_at)}
+                        </td>
+                        <td className="p-3 text-stone-700 dark:text-stone-300 font-semibold">
+                          {o.created_by_name || 'Kasir'}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${o.order_type === 'take_away'
+                            ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                            : 'bg-blue-500/10 text-blue-700 dark:text-blue-400'
+                            }`}>
+                            {o.order_type === 'take_away' ? 'Takeaway' : 'Dine In'}
+                          </span>
+                        </td>
+                        <td className="p-3 font-bold text-stone-800 dark:text-stone-200">
+                          {String(o.payment?.method || 'Cash').toUpperCase()}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                            isRefunded
+                              ? 'bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800'
+                              : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
                           }`}>
-                          {o.order_type === 'take_away' ? 'Takeaway' : 'Dine In'}
-                        </span>
-                      </td>
-                      <td className="p-3 font-bold text-stone-800 dark:text-stone-200">
-                        {String(o.payment?.method || 'Cash').toUpperCase()}
-                      </td>
-                      <td className="p-3 text-right text-stone-500">
-                        {formatRupiah(o.subtotal || o.total_amount)}
-                      </td>
-                      <td className="p-3 text-right font-black text-[#3B2A1F] dark:text-[#D4A373] text-xs">
-                        {formatRupiah(o.total_amount)}
-                      </td>
-                    </tr>
-                  ))
+                            {isRefunded ? 'Refunded' : 'Selesai'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right text-stone-500">
+                          {isRefunded ? (
+                            <span className="line-through text-stone-400">{formatRupiah(o.subtotal || o.total_amount)}</span>
+                          ) : (
+                            formatRupiah(o.subtotal || o.total_amount)
+                          )}
+                        </td>
+                        <td className="p-3 text-right font-black text-xs">
+                          {isRefunded ? (
+                            <div className="flex flex-col items-end">
+                              <span className="text-rose-600 dark:text-rose-400 font-black">Rp 0</span>
+                              <span className="text-[10px] text-stone-400 line-through">
+                                {formatRupiah(o.total_amount)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-[#3B2A1F] dark:text-[#D4A373]">
+                              {formatRupiah(o.total_amount)}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
-              {reportData.filteredOrders.length > 0 && (
+              {reportData.transactionDetailOrders.length > 0 && (
                 <tfoot className="bg-stone-50 dark:bg-[#23201D] border-t-2 border-stone-200 dark:border-stone-700 font-black text-xs sticky bottom-0 z-10">
                   <tr>
-                    <td colSpan={3} className="p-3 text-stone-800 dark:text-stone-200">
-                      TOTAL PENJUALAN PERIODE ({reportData.totalOrdersCount} TRANSAKSI)
+                    <td colSpan={4} className="p-3 text-stone-800 dark:text-stone-200">
+                      TOTAL PENJUALAN PERIODE ({reportData.totalOrdersCount} TRANSAKSI SELESAI)
                     </td>
                     <td colSpan={3}></td>
                     <td className="p-3 text-right text-emerald-600 dark:text-emerald-400 text-sm">

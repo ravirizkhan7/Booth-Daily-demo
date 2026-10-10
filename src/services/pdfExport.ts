@@ -270,22 +270,26 @@ export const exportReportToPDF = ({
   currentY = (doc as any).lastAutoTable.finalY + 6;
 
   // 6. SECTION: DETAIL TRANSAKSI PENJUALAN (SALES ORDERS)
-  const ordersTableRows = reportData.filteredOrders.map(o => [
-    o.order_number,
-    formatDate(o.created_at),
-    o.created_by_name || 'Kasir',
-    o.order_type === 'take_away' ? 'Takeaway' : 'Dine In',
-    String(o.payment?.method || 'Cash').toUpperCase(),
-    formatRupiah(o.total_amount)
-  ]);
+  const ordersTableRows = reportData.transactionDetailOrders.map(o => {
+    const isRefunded = o.payment?.status === 'refunded';
+    return [
+      o.order_number,
+      formatDate(o.created_at),
+      o.created_by_name || 'Kasir',
+      o.order_type === 'take_away' ? 'Takeaway' : 'Dine In',
+      String(o.payment?.method || 'Cash').toUpperCase(),
+      isRefunded ? 'REFUNDED' : 'SELESAI',
+      isRefunded ? 'Rp 0' : formatRupiah(o.total_amount)
+    ];
+  });
 
   if (ordersTableRows.length === 0) {
-    ordersTableRows.push(['-', '-', 'Tidak ada transaksi penjualan pada periode ini', '-', '-', 'Rp 0']);
+    ordersTableRows.push(['-', '-', 'Tidak ada transaksi penjualan pada periode ini', '-', '-', '-', 'Rp 0']);
   }
 
   autoTable(doc, {
     startY: currentY,
-    head: [['NO. PESANAN', 'TANGGAL & WAKTU', 'KASIR', 'TIPE', 'PEMBAYARAN', 'TOTAL OMZET']],
+    head: [['NO. PESANAN', 'TANGGAL & WAKTU', 'KASIR', 'TIPE', 'PEMBAYARAN', 'STATUS', 'TOTAL OMZET']],
     body: ordersTableRows,
     foot: [
       [
@@ -293,7 +297,8 @@ export const exportReportToPDF = ({
         '',
         '',
         '',
-        `${reportData.totalOrdersCount} Trx`,
+        '',
+        `${reportData.totalOrdersCount} Trx Selesai`,
         formatRupiah(reportData.totalSales)
       ]
     ],
@@ -318,7 +323,17 @@ export const exportReportToPDF = ({
       0: { fontStyle: 'bold' },
       3: { halign: 'center' },
       4: { halign: 'center' },
-      5: { halign: 'right', fontStyle: 'bold' }
+      5: { halign: 'center', fontStyle: 'bold' },
+      6: { halign: 'right', fontStyle: 'bold' }
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === 5) {
+        if (data.cell.raw === 'REFUNDED') {
+          data.cell.styles.textColor = [190, 30, 30];
+        } else if (data.cell.raw === 'SELESAI') {
+          data.cell.styles.textColor = [20, 130, 60];
+        }
+      }
     },
     alternateRowStyles: {
       fillColor: tableAltColor

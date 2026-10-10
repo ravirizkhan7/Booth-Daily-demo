@@ -7,7 +7,7 @@ import { formatRupiah, formatDate } from '../utils/formatters';
 import {
   Boxes, History, Plus, Search, Edit2, Trash2, ArrowUpRight, ArrowDownRight,
   RotateCcw, SlidersHorizontal, AlertTriangle, CheckCircle2, XCircle, X,
-  FileText, ShieldCheck, ShieldAlert, PackageCheck, Eye, RefreshCw
+  FileText, ShieldCheck, ShieldAlert, PackageCheck, Eye, RefreshCw, ShoppingCart, Pencil
 } from 'lucide-react';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 
@@ -58,7 +58,8 @@ export const InventoryPage: React.FC = () => {
   const [selectedStockForUpdate, setSelectedStockForUpdate] = useState<Stock | null>(null);
   const [updateType, setUpdateType] = useState<'add' | 'subtract'>('add');
   const [updateAmount, setUpdateAmount] = useState<number>(100);
-  const [updateReason, setUpdateReason] = useState<string>('Pembelian');
+  const [updateReason, setUpdateReason] = useState<string>('Hasil Stock Opname Fisik');
+  const [updateNotes, setUpdateNotes] = useState<string>('');
 
   // Detail History Modal
   const [selectedHistory, setSelectedHistory] = useState<StockHistory | null>(null);
@@ -74,6 +75,7 @@ export const InventoryPage: React.FC = () => {
     min_amount: 200,
     cost_per_unit: 150
   });
+  const [editStockNotes, setEditStockNotes] = useState<string>('');
 
   const [formError, setFormError] = useState('');
   const [updateError, setUpdateError] = useState('');
@@ -114,6 +116,8 @@ export const InventoryPage: React.FC = () => {
         matchesType = type === 'pembelian' || type === 'in';
       } else if (historyTypeFilter === 'penjualan') {
         matchesType = type === 'penjualan' || type === 'sale_deduction';
+      } else if (historyTypeFilter === 'refund') {
+        matchesType = type === 'refund';
       } else if (historyTypeFilter === 'penyesuaian') {
         matchesType = type === 'penyesuaian' || type === 'out' || type === 'adjustment';
       } else if (historyTypeFilter === 'edit_manual') {
@@ -127,6 +131,7 @@ export const InventoryPage: React.FC = () => {
   // Open Master Stock Create Modal
   const handleOpenAddStock = () => {
     setEditingStock(null);
+    setEditStockNotes('');
     setFormError('');
     setStockFormData({
       name: '',
@@ -141,6 +146,7 @@ export const InventoryPage: React.FC = () => {
   // Open Master Stock Edit Modal
   const handleOpenEditStock = (s: Stock) => {
     setEditingStock(s);
+    setEditStockNotes('');
     setFormError('');
     setStockFormData({
       name: s.name,
@@ -160,23 +166,40 @@ export const InventoryPage: React.FC = () => {
       return;
     }
 
+    const currentAmt = Number(stockFormData.current_amount);
+    if (isNaN(currentAmt) || currentAmt < 0) {
+      setFormError('Jumlah stok tidak boleh bernilai negatif');
+      return;
+    }
+
+    const isQtyChanged = editingStock !== null && currentAmt !== editingStock.current_amount;
+    if (isQtyChanged && !editStockNotes.trim()) {
+      setFormError('Keterangan perubahan stok wajib diisi ketika mengubah kuantitas stok bahan.');
+      return;
+    }
+
     try {
       const payload = {
         name: stockFormData.name.trim(),
         unit: stockFormData.unit,
-        current_amount: Number(stockFormData.current_amount),
+        current_amount: currentAmt,
         min_amount: Number(stockFormData.min_amount || 0),
         cost_per_unit: Number(stockFormData.cost_per_unit || 0),
       };
 
       if (editingStock) {
-        await editStockItem(editingStock.id, payload);
+        if (isQtyChanged) {
+          await editStockItem(editingStock.id, payload, { notes: editStockNotes.trim() });
+        } else {
+          await editStockItem(editingStock.id, payload);
+        }
       } else {
         await addStockItem(payload);
       }
 
       setIsStockModalOpen(false);
       setEditingStock(null);
+      setEditStockNotes('');
       setFormError('');
     } catch (err: any) {
       console.error('Save stock error:', err);
@@ -196,7 +219,8 @@ export const InventoryPage: React.FC = () => {
     setSelectedStockForUpdate(s);
     setUpdateType('add');
     setUpdateAmount(100);
-    setUpdateReason('Pembelian');
+    setUpdateReason('Hasil Stock Opname Fisik');
+    setUpdateNotes('');
     setUpdateError('');
     setIsUpdateStokOpen(true);
   };
@@ -211,13 +235,31 @@ export const InventoryPage: React.FC = () => {
       return;
     }
 
+    if (!updateReason.trim()) {
+      setUpdateError('Silakan pilih alasan penyesuaian stok');
+      return;
+    }
+
+    if (!updateNotes.trim()) {
+      setUpdateError('Keterangan penyesuaian stok wajib diisi dan tidak boleh hanya berisi spasi.');
+      return;
+    }
+
+    const change = updateType === 'add' ? updateAmount : -updateAmount;
+    if (change < 0 && selectedStockForUpdate.current_amount + change < 0) {
+      setUpdateError(
+        `Penyesuaian gagal: stok tidak boleh menjadi negatif (sisa saat ini: ${selectedStockForUpdate.current_amount.toLocaleString('id-ID')} ${selectedStockForUpdate.unit})`
+      );
+      return;
+    }
+
     try {
-      const change = updateType === 'add' ? updateAmount : -updateAmount;
-      await adjustStockQuantity(selectedStockForUpdate.id, change, updateReason);
+      await adjustStockQuantity(selectedStockForUpdate.id, change, updateReason, updateNotes.trim());
       setIsUpdateStokOpen(false);
       setSelectedStockForUpdate(null);
       setUpdateAmount(100);
-      setUpdateReason('Pembelian');
+      setUpdateReason('Hasil Stock Opname Fisik');
+      setUpdateNotes('');
       setUpdateError('');
     } catch (err: any) {
       console.error('Update stock error:', err);
@@ -230,25 +272,36 @@ export const InventoryPage: React.FC = () => {
     const t = (typeString || '').toLowerCase();
     if (t === 'pembelian' || t === 'in') {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-          🟢 Pembelian
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+          <PackageCheck className="w-3.5 h-3.5" />
+          Pembelian
         </span>
       );
     } else if (t === 'penjualan' || t === 'sale_deduction') {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-rose-500/10 text-rose-600 border border-rose-500/20">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-rose-500/10 text-rose-600 border border-rose-500/20">
+          <ShoppingCart className="w-3.5 h-3.5" />
           Penjualan
         </span>
       );
-    } else if (t === 'penyesuaian' || t === 'out') {
+    } else if (t === 'refund') {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/10 text-amber-600 border border-amber-500/20">
-          🟠 Penyesuaian
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-rose-500/10 text-rose-600 border border-rose-500/20">
+          <RotateCcw className="w-3.5 h-3.5" />
+          Refund
+        </span>
+      );
+    } else if (t === 'penyesuaian' || t === 'out' || t === 'adjustment') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/10 text-amber-600 border border-amber-500/20">
+          <SlidersHorizontal className="w-3.5 h-3.5" />
+          Penyesuaian
         </span>
       );
     } else {
       return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-sky-500/10 text-sky-600 border border-sky-500/20">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-sky-500/10 text-sky-600 border border-sky-500/20">
+          <Pencil className="w-3.5 h-3.5" />
           Edit Manual
         </span>
       );
@@ -369,7 +422,7 @@ export const InventoryPage: React.FC = () => {
                 { id: 'ALL', label: 'Semua' },
                 { id: 'AMAN', label: '🟢 Aman' },
                 { id: 'MENIPIS', label: '🟡 Menipis' },
-                { id: 'HABIS', label: 'Habis' }
+                { id: 'HABIS', label: '🔴 Habis' }
               ].map(f => (
                 <button
                   key={f.id}
@@ -424,30 +477,28 @@ export const InventoryPage: React.FC = () => {
                     filteredStocks.map(stk => {
                       // Status calculation
                       let statusBadge = {
+                        emoji: '🟢',
                         label: 'Aman',
-                        bg: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30',
-                        icon: CheckCircle2
+                        bg: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
                       };
 
                       if (stk.current_amount <= 0) {
                         statusBadge = {
+                          emoji: '🔴',
                           label: 'Habis',
-                          bg: 'bg-rose-500/10 text-rose-600 border-rose-500/30',
-                          icon: XCircle
+                          bg: 'bg-rose-500/10 text-rose-600 border-rose-500/30'
                         };
                       } else if (stk.current_amount <= stk.min_amount) {
                         statusBadge = {
+                          emoji: '🟡',
                           label: 'Menipis',
-                          bg: 'bg-amber-500/10 text-amber-600 border-amber-500/30',
-                          icon: AlertTriangle
+                          bg: 'bg-amber-500/10 text-amber-600 border-amber-500/30'
                         };
                       }
 
                       // Capacity for progress bar
                       const maxCapacity = Math.max(stk.min_amount * 3, stk.current_amount, 1);
                       const percent = Math.min(100, Math.round((stk.current_amount / maxCapacity) * 100));
-
-                      const StatusIcon = statusBadge.icon;
 
                       return (
                         <tr key={stk.id} className="hover:bg-stone-50/50 dark:hover:bg-[#25221F] transition-colors">
@@ -500,8 +551,8 @@ export const InventoryPage: React.FC = () => {
                           {/* Status */}
                           <td className="p-4">
                             <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border ${statusBadge.bg}`}>
-                              <StatusIcon className="w-3.5 h-3.5" />
-                              {statusBadge.label}
+                              <span className="text-xs leading-none">{statusBadge.emoji}</span>
+                              <span>{statusBadge.label}</span>
                             </span>
                           </td>
 
@@ -512,10 +563,10 @@ export const InventoryPage: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleOpenUpdateStok(stk)}
-                                  className="px-3 py-1.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-black text-xs transition-colors shadow-sm cursor-pointer flex items-center gap-1"
-                                  title="Update Jumlah Stok"
+                                  className="px-3 py-1.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-black text-xs transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                                  title="Update / Sesuaikan Stok"
                                 >
-                                  <RefreshCw className="w-3.5 h-3.5 text-[#D4A373]" />
+                                  <SlidersHorizontal className="w-3.5 h-3.5 text-[#D4A373]" />
                                   Update Stok
                                 </button>
                                 <button
@@ -568,24 +619,29 @@ export const InventoryPage: React.FC = () => {
 
             <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
               {[
-                { id: 'ALL', label: 'Semua Jenis' },
-                { id: 'pembelian', label: '🟢 Pembelian' },
-                { id: 'penjualan', label: 'Penjualan' },
-                { id: 'penyesuaian', label: '🟠 Penyesuaian' },
-                { id: 'edit_manual', label: 'Edit Manual' }
-              ].map(type => (
-                <button
-                  key={type.id}
-                  type="button"
-                  onClick={() => setHistoryTypeFilter(type.id)}
-                  className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition-all border cursor-pointer whitespace-nowrap ${historyTypeFilter === type.id
-                    ? 'bg-[#3B2A1F] text-[#F7F5F2] border-[#3B2A1F]'
-                    : 'bg-stone-50 dark:bg-[#171514] text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-800 hover:border-stone-300'
-                    }`}
-                >
-                  {type.label}
-                </button>
-              ))}
+                { id: 'ALL', label: 'Semua Jenis', icon: null },
+                { id: 'pembelian', label: 'Pembelian', icon: PackageCheck },
+                { id: 'penjualan', label: 'Penjualan', icon: ShoppingCart },
+                { id: 'refund', label: 'Refund', icon: RotateCcw },
+                { id: 'penyesuaian', label: 'Penyesuaian', icon: SlidersHorizontal },
+                { id: 'edit_manual', label: 'Edit Manual', icon: Pencil }
+              ].map(type => {
+                const IconComponent = type.icon;
+                return (
+                  <button
+                    key={type.id}
+                    type="button"
+                    onClick={() => setHistoryTypeFilter(type.id)}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-bold transition-all border cursor-pointer whitespace-nowrap ${historyTypeFilter === type.id
+                      ? 'bg-[#3B2A1F] text-[#F7F5F2] border-[#3B2A1F]'
+                      : 'bg-stone-50 dark:bg-[#171514] text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-800 hover:border-stone-300'
+                      }`}
+                  >
+                    {IconComponent && <IconComponent className="w-3.5 h-3.5" />}
+                    {type.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -673,131 +729,193 @@ export const InventoryPage: React.FC = () => {
       )}
 
       {/* Modal Update Stok Dialog */}
-      {isUpdateStokOpen && selectedStockForUpdate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
-            <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
-              <div>
-                <h3 className="font-black text-base text-stone-900 dark:text-stone-100">
-                  Update Stok Bahan Baku
-                </h3>
-                <p className="text-xs text-[#C68B59] font-extrabold mt-0.5">
-                  {selectedStockForUpdate.name} (Sisa saat ini: {selectedStockForUpdate.current_amount.toLocaleString('id-ID')} {selectedStockForUpdate.unit})
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsUpdateStokOpen(false)}
-                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {isUpdateStokOpen && selectedStockForUpdate && (() => {
+        const estimatedFinal = Math.round((
+          updateType === 'add'
+            ? selectedStockForUpdate.current_amount + (Number(updateAmount) || 0)
+            : selectedStockForUpdate.current_amount - (Number(updateAmount) || 0)
+        ) * 1000) / 1000;
+        const isNegative = estimatedFinal < 0;
+        const isInvalidAmount = !updateAmount || updateAmount <= 0;
+        const isInvalidReason = !updateReason.trim();
+        const isInvalidNotes = !updateNotes.trim();
+        const isSubmitDisabled = isInvalidAmount || isNegative || isInvalidReason || isInvalidNotes;
 
-            <form onSubmit={handleSaveUpdateStok} className="space-y-4 text-xs">
-              {updateError && (
-                <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 rounded-2xl text-rose-600 dark:text-rose-400 font-bold text-xs">
-                  {updateError}
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
+              <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
+                <div>
+                  <h3 className="font-black text-base text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                    <SlidersHorizontal className="w-4 h-4 text-[#D4A373]" />
+                    Penyesuaian Stok Manual
+                  </h3>
+                  <p className="text-xs text-[#C68B59] font-extrabold mt-0.5">
+                    {selectedStockForUpdate.name} (Sisa saat ini: {selectedStockForUpdate.current_amount.toLocaleString('id-ID')} {selectedStockForUpdate.unit})
+                  </p>
                 </div>
-              )}
-              <div>
-                <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1.5">
-                  Jenis Update Stok
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setUpdateType('add')}
-                    className={`py-2.5 px-3 rounded-xl text-xs font-black border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${updateType === 'add'
-                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                      : 'bg-stone-50 dark:bg-[#171514] text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700'
-                      }`}
-                  >
-                    <Plus className="w-4 h-4" />
-                    Tambah Stok (+)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUpdateType('subtract')}
-                    className={`py-2.5 px-3 rounded-xl text-xs font-black border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${updateType === 'subtract'
-                      ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
-                      : 'bg-stone-50 dark:bg-[#171514] text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700'
-                      }`}
-                  >
-                    <X className="w-4 h-4" />
-                    Kurangi Stok (-)
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1">
-                  Jumlah Perubahan ({selectedStockForUpdate.unit}) <span className="text-rose-500">*</span>
-                </label>
-                <NumberInput
-                  type="number"
-                  min={0.001}
-                  step="any"
-                  allowDecimals={true}
-                  required
-                  value={updateAmount}
-                  onChange={val => setUpdateAmount(val)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-black text-base focus:outline-none focus:ring-2 focus:ring-[#3B2A1F]"
-                />
-              </div>
-
-              <div>
-                <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1">
-                  Alasan Perubahan <span className="text-rose-500">*</span>
-                </label>
-                <select
-                  value={updateReason}
-                  onChange={e => setUpdateReason(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-semibold focus:outline-none"
-                >
-                  <option value="Pembelian">Pembelian / Restok Supplier</option>
-                  <option value="Barang Rusak">Barang Rusak / Kemasan Bocor</option>
-                  <option value="Barang Hilang">Barang Hilang / Selisih Opname</option>
-                  <option value="Koreksi">Koreksi Salah Input</option>
-                  <option value="Hasil Stock Opname">Hasil Stock Opname Fisik</option>
-                  <option value="Kadaluarsa (Expired)">Kadaluarsa (Expired)</option>
-                  <option value="Penyesuaian Manual">Penyesuaian Manual</option>
-                </select>
-              </div>
-
-              {/* Estimate Calculation Preview */}
-              <div className="p-3.5 bg-stone-100 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 flex justify-between items-center text-xs font-bold">
-                <span className="text-stone-500">Estimasi Stok Akhir:</span>
-                <span className="text-stone-900 dark:text-stone-100 font-black text-sm">
-                  {Math.max(
-                    0,
-                    updateType === 'add'
-                      ? selectedStockForUpdate.current_amount + updateAmount
-                      : selectedStockForUpdate.current_amount - updateAmount
-                  ).toLocaleString('id-ID')}{' '}
-                  {selectedStockForUpdate.unit}
-                </span>
-              </div>
-
-              <div className="flex justify-end gap-2.5 pt-3 border-t border-stone-100 dark:border-stone-800">
                 <button
                   type="button"
                   onClick={() => setIsUpdateStokOpen(false)}
-                  className="px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors"
+                  className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
                 >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-extrabold shadow-md transition-all cursor-pointer"
-                >
-                  Simpan & Perbarui Stok
+                  <X className="w-5 h-5" />
                 </button>
               </div>
-            </form>
+
+              {/* Informational Banner */}
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-[11px] text-amber-800 dark:text-amber-300 font-semibold leading-relaxed">
+                Penyesuaian ini langsung mengubah sisa kuantitas fisik bahan baku dan dicatat pada riwayat sebagai <strong>Penyesuaian</strong>. Untuk pembelian dari supplier, silakan gunakan menu <strong>Pembelian</strong>.
+              </div>
+
+              <form onSubmit={handleSaveUpdateStok} className="space-y-4 text-xs">
+                {updateError && (
+                  <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 rounded-2xl text-rose-600 dark:text-rose-400 font-bold text-xs">
+                    {updateError}
+                  </div>
+                )}
+                <div>
+                  <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1.5">
+                    Arah Penyesuaian Stok
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setUpdateType('add')}
+                      className={`py-2.5 px-3 rounded-xl text-xs font-black border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${updateType === 'add'
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                        : 'bg-stone-50 dark:bg-[#171514] text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700'
+                        }`}
+                    >
+                      <Plus className="w-4 h-4" />
+                      Tambah Stok (+)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUpdateType('subtract')}
+                      className={`py-2.5 px-3 rounded-xl text-xs font-black border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${updateType === 'subtract'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                        : 'bg-stone-50 dark:bg-[#171514] text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700'
+                        }`}
+                    >
+                      <X className="w-4 h-4" />
+                      Kurangi Stok (-)
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1">
+                    Jumlah Perubahan ({selectedStockForUpdate.unit}) <span className="text-rose-500">*</span>
+                  </label>
+                  <NumberInput
+                    type="number"
+                    min={0.001}
+                    step="any"
+                    allowDecimals={true}
+                    required
+                    value={updateAmount}
+                    onChange={val => {
+                      setUpdateAmount(val);
+                      setUpdateError('');
+                    }}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-black text-base focus:outline-none focus:ring-2 focus:ring-[#3B2A1F]"
+                  />
+                  {updateAmount <= 0 && (
+                    <p className="text-rose-500 text-[10px] font-bold mt-1">
+                      Jumlah perubahan harus lebih besar dari 0
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1">
+                    Alasan Penyesuaian <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={updateReason}
+                    onChange={e => {
+                      setUpdateReason(e.target.value);
+                      setUpdateError('');
+                    }}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-semibold focus:outline-none"
+                    required
+                  >
+                    <option value="Hasil Stock Opname Fisik">Hasil Stock Opname Fisik</option>
+                    <option value="Barang Rusak / Tumpah">Barang Rusak / Tumpah</option>
+                    <option value="Barang Hilang / Selisih Fisik">Barang Hilang / Selisih Fisik</option>
+                    <option value="Koreksi Salah Input">Koreksi Salah Input</option>
+                    <option value="Kadaluarsa (Expired)">Kadaluarsa (Expired)</option>
+                    <option value="Penyesuaian Manual Lainnya">Penyesuaian Manual Lainnya</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1">
+                    Keterangan <span className="text-rose-500">*</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    required
+                    value={updateNotes}
+                    onChange={e => {
+                      setUpdateNotes(e.target.value);
+                      setUpdateError('');
+                    }}
+                    placeholder="Contoh: Susu tumpah sekitar 250 ml saat membersihkan mesin steamer."
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-medium text-xs focus:outline-none focus:ring-2 focus:ring-[#3B2A1F]"
+                  />
+                  {!updateNotes.trim() && (
+                    <p className="text-rose-500 text-[10px] font-bold mt-1">
+                      Keterangan wajib diisi dan tidak boleh hanya berisi spasi
+                    </p>
+                  )}
+                </div>
+
+                {/* Estimate Calculation Preview */}
+                <div className={`p-3.5 rounded-2xl border flex justify-between items-center text-xs font-bold transition-colors ${
+                  isNegative
+                    ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800'
+                    : 'bg-stone-100 dark:bg-[#171514] border-stone-200 dark:border-stone-800'
+                }`}>
+                  <span className={isNegative ? 'text-rose-600 dark:text-rose-400 font-bold' : 'text-stone-500'}>
+                    {isNegative ? 'Stok Tidak Boleh Negatif:' : 'Estimasi Stok Akhir:'}
+                  </span>
+                  <span className={`font-black text-sm ${isNegative ? 'text-rose-600 dark:text-rose-400' : 'text-stone-900 dark:text-stone-100'}`}>
+                    {estimatedFinal.toLocaleString('id-ID')} {selectedStockForUpdate.unit}
+                  </span>
+                </div>
+                {isNegative && (
+                  <p className="text-rose-500 text-[11px] font-bold">
+                    Perubahan ini akan membuat stok menjadi negatif. Sisa stok saat ini hanya {selectedStockForUpdate.current_amount.toLocaleString('id-ID')} {selectedStockForUpdate.unit}.
+                  </p>
+                )}
+
+                <div className="flex justify-end gap-2.5 pt-3 border-t border-stone-100 dark:border-stone-800">
+                  <button
+                    type="button"
+                    onClick={() => setIsUpdateStokOpen(false)}
+                    className="px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmitDisabled}
+                    className={`px-5 py-2.5 rounded-xl font-extrabold shadow-md transition-all ${
+                      isSubmitDisabled
+                        ? 'bg-stone-300 dark:bg-stone-800 text-stone-400 dark:text-stone-600 cursor-not-allowed shadow-none'
+                        : 'bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] cursor-pointer'
+                    }`}
+                  >
+                    Simpan Penyesuaian
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Modal Create/Edit Master Stock Item */}
       {isStockModalOpen && (
@@ -870,13 +988,16 @@ export const InventoryPage: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-stone-700 dark:text-stone-300 mb-1">
-                    Stok Awal ({stockFormData.unit})
+                    {editingStock ? `Jumlah Stok (${stockFormData.unit})` : `Stok Awal (${stockFormData.unit})`}
                   </label>
                   <NumberInput
                     min={0}
                     allowDecimals={true}
                     value={stockFormData.current_amount}
-                    onChange={val => setStockFormData({ ...stockFormData, current_amount: val })}
+                    onChange={val => {
+                      setStockFormData({ ...stockFormData, current_amount: val });
+                      setFormError('');
+                    }}
                     className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold focus:outline-none"
                   />
                 </div>
@@ -896,6 +1017,42 @@ export const InventoryPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* Notice & Keterangan when editing stock quantity directly */}
+              {editingStock && Number(stockFormData.current_amount) !== editingStock.current_amount && (
+                <div className="space-y-2 pt-1">
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-[11px] text-amber-800 dark:text-amber-300 font-semibold space-y-1">
+                    <p>
+                      Kuantitas stok diubah dari <strong>{editingStock.current_amount.toLocaleString('id-ID')} {editingStock.unit}</strong> menjadi <strong>{Number(stockFormData.current_amount).toLocaleString('id-ID')} {editingStock.unit}</strong> ({Number(stockFormData.current_amount) - editingStock.current_amount > 0 ? '+' : ''}{(Number(stockFormData.current_amount) - editingStock.current_amount).toLocaleString('id-ID')} {editingStock.unit}).
+                    </p>
+                    <p className="text-[10px] text-amber-700 dark:text-amber-400">
+                      Perubahan ini akan dicatat sebagai <strong>Edit Manual</strong> pada Riwayat Stok.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block font-extrabold text-stone-700 dark:text-stone-300 mb-1">
+                      Keterangan Edit Kuantitas <span className="text-rose-500">*</span>
+                    </label>
+                    <textarea
+                      rows={2}
+                      required
+                      value={editStockNotes}
+                      onChange={e => {
+                        setEditStockNotes(e.target.value);
+                        setFormError('');
+                      }}
+                      placeholder="Contoh: Koreksi selisih hitung fisik saat audit stok"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-medium text-xs focus:outline-none focus:ring-2 focus:ring-[#3B2A1F]"
+                    />
+                    {!editStockNotes.trim() && (
+                      <p className="text-rose-500 text-[10px] font-bold mt-1">
+                        Keterangan edit kuantitas wajib diisi dan tidak boleh hanya berisi spasi
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2.5 pt-3 border-t border-stone-100 dark:border-stone-800">
                 <button
                   type="button"
@@ -906,7 +1063,12 @@ export const InventoryPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-extrabold shadow-md transition-all cursor-pointer"
+                  disabled={editingStock !== null && Number(stockFormData.current_amount) !== editingStock.current_amount && !editStockNotes.trim()}
+                  className={`px-5 py-2.5 rounded-xl font-extrabold shadow-md transition-all ${
+                    editingStock !== null && Number(stockFormData.current_amount) !== editingStock.current_amount && !editStockNotes.trim()
+                      ? 'bg-stone-300 dark:bg-stone-800 text-stone-400 dark:text-stone-600 cursor-not-allowed shadow-none'
+                      : 'bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] cursor-pointer'
+                  }`}
                 >
                   {editingStock ? 'Simpan Perubahan' : 'Tambah Bahan'}
                 </button>
@@ -919,10 +1081,10 @@ export const InventoryPage: React.FC = () => {
       {/* Modal Detail Riwayat */}
       {selectedHistory && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
-            <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
-              <div>
-                <h3 className="font-black text-base text-stone-900 dark:text-stone-100">
+          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full max-h-[90vh] flex flex-col space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800 min-w-0">
+            <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3 shrink-0">
+              <div className="min-w-0 pr-2">
+                <h3 className="font-black text-base text-stone-900 dark:text-stone-100 truncate">
                   Detail Mutasi Stok
                 </h3>
                 <p className="text-[11px] text-stone-400 font-medium">Ref ID: #{selectedHistory.id}</p>
@@ -930,57 +1092,88 @@ export const InventoryPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setSelectedHistory(null)}
-                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
+                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="p-3.5 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-stone-400 font-bold uppercase text-[10px]">Aktivitas:</span>
-                  {renderActivityBadge(selectedHistory.type)}
+            <div className="space-y-3 text-xs overflow-y-auto min-w-0 pr-0.5 custom-scrollbar">
+              <div className="p-3.5 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-2 min-w-0">
+                <div className="flex justify-between items-center gap-2">
+                  <span className="text-stone-400 font-bold uppercase text-[10px] shrink-0">Aktivitas:</span>
+                  <div className="shrink-0">{renderActivityBadge(selectedHistory.type)}</div>
                 </div>
-                <p className="font-black text-base text-stone-900 dark:text-stone-100">{selectedHistory.stock_name}</p>
+                <p className="font-black text-base text-stone-900 dark:text-stone-100 break-words [overflow-wrap:anywhere] min-w-0">{selectedHistory.stock_name}</p>
               </div>
 
-              <div className="p-3 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-stone-500 font-semibold">Jumlah Perubahan:</span>
-                  <span className={`font-black ${selectedHistory.change_amount > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              <div className="p-3 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-2 min-w-0">
+                {selectedHistory.initial_amount !== undefined && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-stone-500 font-semibold shrink-0">Stok Sebelum Mutasi:</span>
+                    <span className="font-extrabold text-stone-900 dark:text-stone-100 text-right break-words min-w-0">
+                      {selectedHistory.initial_amount.toLocaleString('id-ID')} {selectedHistory.unit}
+                    </span>
+                  </div>
+                )}
+                <div className={`flex justify-between gap-2 ${selectedHistory.initial_amount !== undefined ? 'border-t border-stone-200 dark:border-stone-800 pt-2' : ''}`}>
+                  <span className="text-stone-500 font-semibold shrink-0">Jumlah Perubahan:</span>
+                  <span className={`font-black text-right break-words min-w-0 ${selectedHistory.change_amount > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {selectedHistory.change_amount > 0 ? '+' : ''}{selectedHistory.change_amount.toLocaleString('id-ID')} {selectedHistory.unit}
                   </span>
                 </div>
                 {selectedHistory.final_amount !== undefined && (
-                  <div className="flex justify-between border-t border-stone-200 dark:border-stone-800 pt-2">
-                    <span className="text-stone-500 font-semibold">Stok Akhir Tercatat:</span>
-                    <span className="font-extrabold text-stone-900 dark:text-stone-100">
+                  <div className="flex justify-between gap-2 border-t border-stone-200 dark:border-stone-800 pt-2">
+                    <span className="text-stone-500 font-semibold shrink-0">Stok Akhir Tercatat:</span>
+                    <span className="font-extrabold text-stone-900 dark:text-stone-100 text-right break-words min-w-0">
                       {selectedHistory.final_amount.toLocaleString('id-ID')} {selectedHistory.unit}
                     </span>
                   </div>
                 )}
-                <div className="flex justify-between border-t border-stone-200 dark:border-stone-800 pt-2">
-                  <span className="text-stone-500 font-semibold">Waktu Mutasi:</span>
-                  <span className="font-bold text-stone-700 dark:text-stone-300">
+                <div className="flex justify-between gap-2 border-t border-stone-200 dark:border-stone-800 pt-2">
+                  <span className="text-stone-500 font-semibold shrink-0">Waktu Mutasi:</span>
+                  <span className="font-bold text-stone-700 dark:text-stone-300 text-right">
                     {formatSafeDate(selectedHistory.created_at)}
                   </span>
                 </div>
-                <div className="flex justify-between border-t border-stone-200 dark:border-stone-800 pt-2">
-                  <span className="text-stone-500 font-semibold">Dicatat Oleh:</span>
-                  <span className="font-extrabold text-[#C68B59]">
+                <div className="flex justify-between gap-2 border-t border-stone-200 dark:border-stone-800 pt-2">
+                  <span className="text-stone-500 font-semibold shrink-0">Dicatat Oleh:</span>
+                  <span className="font-extrabold text-[#C68B59] text-right truncate">
                     <User className="w-4 h-4 mr-1 inline" /> {selectedHistory.user_name || 'Owner'}
                   </span>
                 </div>
               </div>
 
-              <div className="p-3 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-1">
-                <p className="text-stone-400 font-bold text-[10px] uppercase">Keterangan / Referensi:</p>
-                <p className="font-bold text-stone-800 dark:text-stone-200">{selectedHistory.reference || '-'}</p>
-              </div>
+              {/* Alasan Operasional & Keterangan */}
+              {selectedHistory.reason && (
+                <div className="p-3 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-1 min-w-0">
+                  <p className="text-stone-400 font-bold text-[10px] uppercase">Alasan Operasional / Perubahan:</p>
+                  <p className="font-black text-stone-800 dark:text-stone-200 break-words [overflow-wrap:anywhere] min-w-0">{selectedHistory.reason}</p>
+                </div>
+              )}
+
+              {selectedHistory.notes ? (
+                <div className="p-3 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-1 min-w-0">
+                  <p className="text-stone-400 font-bold text-[10px] uppercase">Keterangan Detail:</p>
+                  <div className="max-h-32 sm:max-h-36 overflow-y-auto overscroll-contain custom-scrollbar pr-1">
+                    <p className="font-medium text-stone-800 dark:text-stone-200 leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] min-w-0">
+                      {selectedHistory.notes}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-1 min-w-0">
+                  <p className="text-stone-400 font-bold text-[10px] uppercase">Keterangan / Referensi:</p>
+                  <div className="max-h-32 sm:max-h-36 overflow-y-auto overscroll-contain custom-scrollbar pr-1">
+                    <p className="font-bold text-stone-800 dark:text-stone-200 break-words [overflow-wrap:anywhere] min-w-0">
+                      {selectedHistory.reference || '-'}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex justify-end pt-2 shrink-0 border-t border-stone-100 dark:border-stone-800">
               <button
                 type="button"
                 onClick={() => setSelectedHistory(null)}

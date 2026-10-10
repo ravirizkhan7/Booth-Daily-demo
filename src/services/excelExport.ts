@@ -269,7 +269,7 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
 // SHEET 2 — DETAIL PENJUALAN
 // ═══════════════════════════════════════════════════════════════════════════════
 function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
-  const NC = 9;
+  const NC = 10;
   const rows: XLSX.CellObject[][] = [];
   const merges: XLSX.Range[] = [];
   let ri = -1;
@@ -287,27 +287,29 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
   // ── TABLE HEADER ─────────────────────────────────────────────────────────────
   const headerRow = push([
     cs('NO. PESANAN', S.thL), cs('TANGGAL & WAKTU', S.thL), cs('KASIR', S.thL),
-    cs('TIPE', S.thC), cs('PEMBAYARAN', S.thC),
+    cs('TIPE', S.thC), cs('PEMBAYARAN', S.thC), cs('STATUS', S.thC),
     cs('SUBTOTAL (Rp)', S.thR), cs('DISKON (Rp)', S.thR), cs('PAJAK (Rp)', S.thR), cs('TOTAL OMZET (Rp)', S.thR),
   ]);
 
   // ── DATA ROWS ─────────────────────────────────────────────────────────────────
-  if (rd.filteredOrders.length === 0) {
+  if (rd.transactionDetailOrders.length === 0) {
     const r = push([cs('Belum ada transaksi penjualan pada periode ini.', S.disc), ...Array(NC - 1).fill(bl())]);
     fullSpan(r);
   } else {
-    rd.filteredOrders.forEach((o, i) => {
+    rd.transactionDetailOrders.forEach((o, i) => {
       const a = i % 2 === 1;
+      const isRefunded = o.payment?.status === 'refunded';
       push([
         cs(o.order_number, a ? S.tdAL : S.tdL),
         cs(fdt(o.created_at), a ? S.tdAL : S.tdL),
         cs(o.created_by_name || 'Kasir', a ? S.tdAL : S.tdL),
         cs(o.order_type === 'take_away' ? 'Takeaway' : 'Dine In', a ? S.tdAC : S.tdC),
         cs(String(o.payment?.method || 'Cash').toUpperCase(), a ? S.tdAC : S.tdC),
+        cs(isRefunded ? 'REFUNDED' : 'SELESAI', a ? S.tdAC : S.tdC),
         cn(Number(o.subtotal) || Number(o.total_amount) || 0, a ? S.tdAR : S.tdR),
         cn(Number(o.discount) || 0, a ? S.tdAR : S.tdR),
         cn(Number(o.tax) || 0, a ? S.tdAR : S.tdR),
-        cn(Number(o.total_amount) || 0, a ? S.tdAR : S.tdR),
+        cn(isRefunded ? 0 : (Number(o.total_amount) || 0), a ? S.tdAR : S.tdR),
       ]);
     });
   }
@@ -315,17 +317,17 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
   // ── TOTAL ROW ─────────────────────────────────────────────────────────────────
   {
     const r = push([
-      cs(`TOTAL PENJUALAN PERIODE — ${rd.totalOrdersCount} Transaksi`, S.totL),
-      cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL),
+      cs(`TOTAL PENJUALAN PERIODE — ${rd.totalOrdersCount} Transaksi Selesai`, S.totL),
+      cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL),
       cn(rd.totalSales, S.totR),
     ]);
-    merges.push({ s: { r, c: 0 }, e: { r, c: 7 } });
+    merges.push({ s: { r, c: 0 }, e: { r, c: 8 } });
   }
 
   // ── WORKSHEET SETUP ───────────────────────────────────────────────────────────
   const ws = toWS(rows);
   ws['!merges'] = merges;
-  ws['!cols'] = [{ wch: 21 }, { wch: 22 }, { wch: 16 }, { wch: 12 }, { wch: 13 }, { wch: 16 }, { wch: 13 }, { wch: 13 }, { wch: 18 }];
+  ws['!cols'] = [{ wch: 21 }, { wch: 22 }, { wch: 16 }, { wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 16 }, { wch: 13 }, { wch: 13 }, { wch: 18 }];
   ws['!rows'] = rows.map((_, i) => ({ hpx: i === 0 ? 32 : i === 1 ? 22 : 20 }));
   ws['!views'] = [{ state: 'frozen', xSplit: 0, ySplit: headerRow + 1 }];
   ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: headerRow, c: 0 }, e: { r: rows.length - 1, c: NC - 1 } }) };

@@ -11,6 +11,7 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   isLoading?: boolean;
+  children?: React.ReactNode;
 }
 
 export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -22,7 +23,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   isDanger = true,
   onConfirm,
   onCancel,
-  isLoading = false
+  isLoading = false,
+  children
 }) => {
   if (!isOpen) return null;
 
@@ -54,6 +56,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             {message}
           </p>
         </div>
+
+        {children}
 
         <div className="flex items-center gap-2.5 pt-2">
           <button

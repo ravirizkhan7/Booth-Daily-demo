@@ -70,11 +70,16 @@ export const TransactionsPage: React.FC = () => {
     return matchesUser && matchesSearch && matchesMethod;
   });
 
+  const [refundReason, setRefundReason] = useState<string>('Batal Pelanggan');
+
   const handleConfirmRefund = async () => {
     if (!refundingOrder || isRefunding) return;
     setIsRefunding(true);
     try {
-      await refundOrder(refundingOrder.id);
+      await refundOrder(refundingOrder.id, {
+        refund_reason: refundReason,
+        refunded_by_name: currentUser?.name || 'Owner',
+      });
     } finally {
       setIsRefunding(false);
       setRefundingOrder(null);
@@ -263,7 +268,7 @@ export const TransactionsPage: React.FC = () => {
       <ConfirmDialog
         isOpen={!!refundingOrder}
         title="Konfirmasi Refund Transaksi"
-        message={`Apakah Anda yakin ingin merefund transaksi ${refundingOrder?.order_number}? Pembayaran akan ditandai sebagai refunded dan stok bahan baku akan dikembalikan otomatis.`}
+        message={`Apakah Anda yakin ingin merefund transaksi ${refundingOrder?.order_number}? Pembayaran akan ditandai sebagai refunded dan bahan baku yang sudah digunakan TIDAK akan dikembalikan ke stok.`}
         confirmText="Ya, Refund Transaksi"
         cancelText="Batal"
         isDanger={true}
@@ -272,7 +277,23 @@ export const TransactionsPage: React.FC = () => {
         onCancel={() => {
           if (!isRefunding) setRefundingOrder(null);
         }}
-      />
+      >
+        <div className="text-left pt-1">
+          <label className="block text-[11px] font-bold text-stone-600 dark:text-stone-300 mb-1">
+            Alasan Refund:
+          </label>
+          <select
+            value={refundReason}
+            onChange={e => setRefundReason(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-200 dark:border-stone-700 text-xs font-semibold focus:outline-none"
+          >
+            <option value="Batal Pelanggan">Batal Pelanggan</option>
+            <option value="Salah Buat">Salah Buat</option>
+            <option value="Komplain Rasa">Komplain Rasa</option>
+            <option value="Lainnya">Lainnya</option>
+          </select>
+        </div>
+      </ConfirmDialog>
     </div>
   );
 };

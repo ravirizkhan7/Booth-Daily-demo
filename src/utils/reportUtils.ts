@@ -63,6 +63,7 @@ export interface ReportData {
 
   // Data List
   filteredOrders: Order[];
+  transactionDetailOrders: Order[];
   filteredPurchases: Purchase[];
 
   // Snapshot Kondisi Stok Saat Ini
@@ -223,12 +224,13 @@ export function computeReportData({
   const { start, end, label, startFormatted, endFormatted } = getPeriodRange(dateFilter, startDate, endDate);
 
   // 1. Filter Orders berdasarkan created_at
-  const filteredOrders = orders.filter(o => isDateInRange(o.created_at, start, end) && o.payment?.status !== 'refunded');
+  const periodAllOrders = orders.filter(o => isDateInRange(o.created_at, start, end));
+  const filteredOrders = periodAllOrders.filter(o => o.payment?.status !== 'refunded');
 
   // 2. Filter Purchases berdasarkan date atau created_at
   const filteredPurchases = purchases.filter(p => isDateInRange(p.date || p.created_at, start, end));
 
-  // 3. Overview Penjualan
+  // 3. Overview Penjualan (Hanya pesanan selesai / net sales)
   const totalSales = filteredOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
   const totalOrdersCount = filteredOrders.length;
   const avgOrderValue = totalOrdersCount > 0 ? Math.round(totalSales / totalOrdersCount) : 0;
@@ -237,9 +239,9 @@ export function computeReportData({
   const totalPurchases = filteredPurchases.reduce((sum, p) => sum + (Number(p.total_amount) || 0), 0);
   const totalPurchasesCount = filteredPurchases.length;
 
-  // 5. Perhitungan Estimasi HPP
+  // 5. Perhitungan Estimasi HPP (Termasuk pesanan yang direfund karena bahan baku telah dikonsumsi dan tidak kembali ke stok)
   let totalEstimatedHPP = 0;
-  filteredOrders.forEach(order => {
+  periodAllOrders.forEach(order => {
     if (Array.isArray(order.items)) {
       order.items.forEach(item => {
         const { unitCost } = calculateItemUnitHPP(
@@ -399,6 +401,7 @@ export function computeReportData({
     orderTypeBreakdown,
     topProducts,
     filteredOrders: [...filteredOrders].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    transactionDetailOrders: [...periodAllOrders].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
     filteredPurchases: [...filteredPurchases].sort((a, b) => new Date(b.date || b.created_at).getTime() - new Date(a.date || a.created_at).getTime()),
     lowStocks
   };

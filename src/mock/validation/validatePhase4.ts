@@ -203,37 +203,121 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
       errors.push('[Stock] createStock failed to create stock item');
     }
 
-    // 4.2 Stock Adjustment Positive (+250ml)
+    // 4.2 Stock Adjustment Positive (+250ml) with Reason and Notes
     const adjustedPos = await stockService.adjustStock(
       createdStock.id,
       250,
       'Restock darurat',
-      'Owner'
+      'Owner',
+      'Bahan tambahan untuk event weekend'
     );
     if (adjustedPos.current_amount !== 1000) {
       errors.push(`[Stock] adjustStock +250 expected 1000, got ${adjustedPos.current_amount}`);
+    }
+    const posHistory = mockStore.getStockHistories()[0];
+    if (
+      !posHistory ||
+      posHistory.stock_id !== createdStock.id ||
+      posHistory.type !== 'penyesuaian' ||
+      posHistory.reason !== 'Restock darurat' ||
+      posHistory.notes !== 'Bahan tambahan untuk event weekend' ||
+      posHistory.initial_amount !== 750 ||
+      posHistory.change_amount !== 250 ||
+      posHistory.final_amount !== 1000 ||
+      !posHistory.reference.includes('Bahan tambahan untuk event weekend')
+    ) {
+      errors.push('[Stock] adjustStock failed to record complete history with reason, notes, initial_amount, and final_amount');
     }
 
     // 4.3 Stock Adjustment Negative (-100ml)
     const adjustedNeg = await stockService.adjustStock(
       createdStock.id,
       -100,
-      'Bahan tumpah',
-      'Dinda'
+      'Barang Rusak / Tumpah',
+      'Dinda',
+      'Susu tumpah sekitar 250 ml saat membersihkan mesin steamer.'
     );
     if (adjustedNeg.current_amount !== 900) {
       errors.push(`[Stock] adjustStock -100 expected 900, got ${adjustedNeg.current_amount}`);
     }
+    const negHistory = mockStore.getStockHistories()[0];
+    if (
+      !negHistory ||
+      negHistory.change_amount !== -100 ||
+      negHistory.initial_amount !== 1000 ||
+      negHistory.final_amount !== 900 ||
+      negHistory.reason !== 'Barang Rusak / Tumpah' ||
+      negHistory.notes !== 'Susu tumpah sekitar 250 ml saat membersihkan mesin steamer.'
+    ) {
+      errors.push('[Stock] adjustStock negative mutation history record mismatch');
+    }
 
     // 4.4 Stock Adjustment Negative beyond zero rejection
     try {
-      await stockService.adjustStock(createdStock.id, -2000, 'Over subtract', 'Owner');
+      await stockService.adjustStock(createdStock.id, -2000, 'Over subtract', 'Owner', 'Invalid excessive deduction');
       errors.push('[Stock] adjustStock beyond zero did not throw error');
     } catch {
       // Expected
     }
 
-    // 4.5 Delete stock in use by existing recipe rejection (stk-coffee-beans)
+    // 4.5 Update Stock Metadata Only (No quantity change) -> MUST NOT create fake history
+    const historyCountBeforeMeta = mockStore.getStockHistories().length;
+    const metaUpdated = await stockService.updateStock(createdStock.id, {
+      name: 'Sirup Hazelnut Monin Gold',
+      cost_per_unit: 195,
+      current_amount: 900, // Same current_amount
+    });
+    if (metaUpdated.name !== 'Sirup Hazelnut Monin Gold' || metaUpdated.cost_per_unit !== 195) {
+      errors.push('[Stock] updateStock metadata update failed');
+    }
+    const historyCountAfterMeta = mockStore.getStockHistories().length;
+    if (historyCountAfterMeta !== historyCountBeforeMeta) {
+      errors.push(`[Stock] updateStock with unchanged quantity created fake history! Before: ${historyCountBeforeMeta}, After: ${historyCountAfterMeta}`);
+    }
+
+    // 4.6 Update Stock Quantity via updateStock -> MUST create exactly 1 edit_manual history
+    const historyCountBeforeQtyEdit = mockStore.getStockHistories().length;
+    const qtyUpdated = await stockService.updateStock(
+      createdStock.id,
+      { current_amount: 950 },
+      { notes: 'Koreksi selisih hitung fisik audit harian', user_name: 'Hendro Wijaya' }
+    );
+    if (qtyUpdated.current_amount !== 950) {
+      errors.push(`[Stock] updateStock expected current_amount 950, got ${qtyUpdated.current_amount}`);
+    }
+    const historyCountAfterQtyEdit = mockStore.getStockHistories().length;
+    if (historyCountAfterQtyEdit !== historyCountBeforeQtyEdit + 1) {
+      errors.push(`[Stock] updateStock quantity edit expected exactly 1 history entry, got ${historyCountAfterQtyEdit - historyCountBeforeQtyEdit}`);
+    }
+    const editHistory = mockStore.getStockHistories()[0];
+    if (
+      !editHistory ||
+      editHistory.type !== 'edit_manual' ||
+      editHistory.initial_amount !== 900 ||
+      editHistory.change_amount !== 50 ||
+      editHistory.final_amount !== 950 ||
+      editHistory.notes !== 'Koreksi selisih hitung fisik audit harian' ||
+      editHistory.user_name !== 'Hendro Wijaya' ||
+      !editHistory.reference.includes('Koreksi selisih hitung fisik audit harian')
+    ) {
+      errors.push('[Stock] edit_manual history entry fields mismatch');
+    }
+
+    // 4.7 Update Stock Negative rejection
+    try {
+      await stockService.updateStock(createdStock.id, { current_amount: -20 });
+      errors.push('[Stock] updateStock with negative amount did not throw error');
+    } catch {
+      // Expected
+    }
+
+    // 4.8 Legacy history integrity check (must not crash when reason/notes are undefined)
+    const legacyHistory = mockStore.getStockHistories().find(h => h.id === 'sth-001' || h.id === 'sth-022');
+    if (!legacyHistory || !legacyHistory.reference) {
+      errors.push('[Stock] Legacy history missing or corrupt');
+    }
+
+    // 4.9 Delete stock in use by existing recipe rejection (stk-coffee-beans)
     try {
       await stockService.deleteStock('stk-coffee-beans');
       errors.push('[Stock] deleteStock for stock in active recipe did not throw error');
@@ -241,7 +325,7 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
       // Expected
     }
 
-    // 4.6 Delete unused stock
+    // 4.10 Delete unused stock
     const deleteStockSuccess = await stockService.deleteStock(createdStock.id);
     if (!deleteStockSuccess) {
       errors.push('[Stock] deleteStock for unused stock failed');
@@ -449,8 +533,14 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
     }
 
     const coffeeAfterRefund = mockStore.getStockById('stk-coffee-beans')?.current_amount ?? 0;
-    if (coffeeAfterRefund !== coffeeBefore) {
-      errors.push(`[Refund] Stock after refund not restored. Expected ${coffeeBefore}, got ${coffeeAfterRefund}`);
+    if (coffeeAfterRefund !== coffeeAfterOrder) {
+      errors.push(`[Refund] Stock after refund must NOT be restored. Expected ${coffeeAfterOrder}, got ${coffeeAfterRefund}`);
+    }
+
+    // Verify stock history was updated to type 'refund'
+    const refundHistories = mockStore.getStockHistories().filter(h => h.reference.includes(refundTestOrder.order_number));
+    if (refundHistories.length === 0 || !refundHistories.every(h => h.type === 'refund')) {
+      errors.push('[Refund] Stock history type was not updated to refund');
     }
 
     // Prevent duplicate refund
@@ -489,7 +579,7 @@ if (import.meta.url.endsWith('validatePhase4.ts') || process.argv[1]?.includes('
     console.log('6. Discount Rules CRUD & Active Toggling  : PASS');
     console.log('7. Settings Update & Persistence          : PASS');
     console.log('8. Dynamic Employee CRUD & Custom Login   : PASS');
-    console.log('9. Refund Flow & Stock Restoration Log    : PASS');
+    console.log('9. Refund Flow & Stock Retention Log      : PASS');
     console.log('----------------------------------------------------');
 
     if (report.pass) {
