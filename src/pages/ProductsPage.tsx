@@ -15,8 +15,7 @@ export const ProductsPage: React.FC = () => {
     addProduct,
     editProduct,
     removeProduct,
-    openRecipeModal,
-    showToast
+    openRecipeModal
   } = usePOS();
 
   const [search, setSearch] = useState('');

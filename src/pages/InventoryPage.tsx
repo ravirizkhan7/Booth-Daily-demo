@@ -1,13 +1,12 @@
-import { User } from 'lucide-react';
-import { NumberInput } from '../components/common/NumberInput';
 import React, { useState } from 'react';
+import { NumberInput } from '../components/common/NumberInput';
 import { usePOS } from '../hooks/usePOS';
 import { Stock, StockHistory } from '../types';
-import { formatRupiah, formatDate } from '../utils/formatters';
+import { formatRupiah } from '../utils/formatters';
 import {
-  Boxes, History, Plus, Search, Edit2, Trash2, ArrowUpRight, ArrowDownRight,
+  Boxes, History, Plus, Search, Edit2, Trash2,
   RotateCcw, SlidersHorizontal, AlertTriangle, CheckCircle2, XCircle, X,
-  FileText, ShieldCheck, ShieldAlert, PackageCheck, Eye, RefreshCw, ShoppingCart, Pencil
+  PackageCheck, Eye, ShoppingCart, Pencil, User
 } from 'lucide-react';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 

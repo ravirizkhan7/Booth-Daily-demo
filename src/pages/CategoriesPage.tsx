@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { usePOS } from '../hooks/usePOS';
 import { Category } from '../types';
 import { 
-  ListFilter, Plus, Edit2, Trash2, Search, X, Check,
+  ListFilter, Plus, Edit2, Trash2, Search, X,
   Coffee, CupSoda, GlassWater, Cookie, IceCream, Flame, Utensils, Sparkles, Tag,
   ChevronLeft, ChevronRight
 } from 'lucide-react';

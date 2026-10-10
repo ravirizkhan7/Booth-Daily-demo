@@ -5,7 +5,7 @@ import { orderService } from '../services/orderService';
 import { Order } from '../types';
 import {
   TrendingUp, DollarSign, ShoppingBag, AlertTriangle, Award,
-  Calendar, ArrowUpRight, Coffee, CheckCircle2, Clock, Tag, X, Info,
+  Calendar, ArrowUpRight, Coffee, Clock, Tag, X,
 } from 'lucide-react';
 
 type ChartFilter = 'weekly' | 'monthly' | 'yearly';
@@ -25,13 +25,11 @@ export const DashboardPage: React.FC = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [chartFilter, setChartFilter] = useState<ChartFilter>('weekly');
   const [yearlyOrders, setYearlyOrders] = useState<Order[]>([]);
-  const [isLoadingYearly, setIsLoadingYearly] = useState<boolean>(false);
   const [isDiscountModalOpen, setIsDiscountModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     if (chartFilter === 'yearly' && isOwner && yearlyOrders.length === 0) {
       const year = currentTime.getFullYear();
-      setIsLoadingYearly(true);
       orderService
         .getOrders({
           start_date: `${year}-01-01`,
@@ -42,9 +40,6 @@ export const DashboardPage: React.FC = () => {
         })
         .catch(err => {
           console.warn('[DashboardPage] Failed to fetch yearly orders:', err);
-        })
-        .finally(() => {
-          setIsLoadingYearly(false);
         });
     }
   }, [chartFilter, isOwner, currentTime]);

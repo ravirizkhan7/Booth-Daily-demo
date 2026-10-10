@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { usePOS } from '../hooks/usePOS';
 import { 
-  Settings, Save, RefreshCw, Store, Phone, MapPin, Receipt, CheckCircle2, 
-  Printer, Percent, Tag, Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Info 
+  Settings, Save, RefreshCw, Store, Receipt, CheckCircle2, 
+  Printer, Percent, Tag, Plus, Edit2, Trash2 
 } from 'lucide-react';
 import { printTestReceipt } from '../services/receiptPrint';
 import { formatRupiah } from '../utils/formatters';

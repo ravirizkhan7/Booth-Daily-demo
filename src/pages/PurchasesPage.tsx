@@ -2,10 +2,10 @@ import { NumberInput } from '../components/common/NumberInput';
 import React, { useState } from 'react';
 import { usePOS } from '../hooks/usePOS';
 import { Purchase, PurchaseItem } from '../types';
-import { formatRupiah, formatDate } from '../utils/formatters';
+import { formatRupiah } from '../utils/formatters';
 import {
-  ShoppingBag, Plus, Search, Edit2, Trash2, Eye, X, Calendar,
-  Truck, CheckCircle2, FileText, AlertTriangle
+  ShoppingBag, Plus, Search, Edit2, Trash2, Eye, X,
+  Truck
 } from 'lucide-react';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 

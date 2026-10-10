@@ -163,7 +163,6 @@ export function validateMockData(): ValidationReport {
   });
 
   const businessRules = errors.length === refErrorCount;
-  const bizErrorCount = errors.length;
 
   // 3. RECIPE COVERAGE
   const coveredProductIds = new Set(recipes.map(r => String(r.product_id)));
@@ -178,7 +177,6 @@ export function validateMockData(): ValidationReport {
   });
 
   const recipeCoverage = uncoveredCount === 0;
-  const recipeErrorCount = errors.length;
 
   // 4. ORDER INTEGRITY
   let orderIntegrity = true;

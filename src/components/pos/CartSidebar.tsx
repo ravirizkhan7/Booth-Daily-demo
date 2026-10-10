@@ -17,7 +17,6 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
     setCustomerName,
     updateCartQty,
     updateCartNotes,
-    removeFromCart,
     clearCart,
     openPinModal,
     settings,

@@ -262,7 +262,6 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
   const {
     cart,
-    setCart,
     orderType,
     setOrderType,
     customerName,

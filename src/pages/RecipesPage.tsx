@@ -1,12 +1,12 @@
 import { NumberInput } from '../components/common/NumberInput';
 import React, { useState } from 'react';
 import { usePOS } from '../hooks/usePOS';
-import { Recipe, RecipeIngredient, RecipeStep, Product } from '../types';
+import { Recipe, RecipeIngredient, RecipeStep } from '../types';
 import { formatRupiah } from '../utils/formatters';
 import { getImageUrl } from '../utils/axios';
 import {
-  BookOpen, Clock, Coffee, Plus, Edit3, Trash2, Eye, X, Trash,
-  Sparkles, Lightbulb, Search
+  BookOpen, Clock, Coffee, Plus, Edit3, Trash2, Eye, X,
+  Lightbulb, Search
 } from 'lucide-react';
 import { ImageUpload } from '../components/common/ImageUpload';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';

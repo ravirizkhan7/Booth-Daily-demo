@@ -3,13 +3,13 @@ import { usePOS } from '../hooks/usePOS';
 import { CategoryBar } from '../components/pos/CategoryBar';
 import { ProductCard } from '../components/pos/ProductCard';
 import { CartSidebar } from '../components/pos/CartSidebar';
-import { Search, ShoppingBag, Filter, Sparkles, AlertCircle } from 'lucide-react';
+import { Search, ShoppingBag, Sparkles, AlertCircle } from 'lucide-react';
 import { formatRupiah } from '../utils/formatters';
 import { getProductStockInfo } from '../utils/stockUtils';
 
 export const POSPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState("");
-  const { products, recipes, stocks, selectedCategory, cart, openPinModal } = usePOS();
+  const { products, recipes, stocks, selectedCategory, cart } = usePOS();
   const [isMobileCartOpen, setIsMobileCartOpen] = useState<boolean>(false);
 
   // Filter products based on category and search query

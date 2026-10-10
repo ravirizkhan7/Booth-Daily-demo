@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { usePOS } from '../hooks/usePOS';
 import { Order } from '../types';
 import { formatRupiah, formatDate } from '../utils/formatters';
 import { orderService } from '../services/orderService';
-import { History, Search, Filter, Printer, RotateCcw, Calendar, RefreshCw } from 'lucide-react';
+import { History, Search, Printer, RotateCcw, RefreshCw } from 'lucide-react';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 
 export const TransactionsPage: React.FC = () => {

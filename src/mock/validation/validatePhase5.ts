@@ -1,9 +1,6 @@
 import { mockStore } from '../store';
 import { productService } from '../../services/productService';
-import { recipeService } from '../../services/recipeService';
-import { stockService } from '../../services/stockService';
 import { orderService } from '../../services/orderService';
-import { discountService } from '../../services/discountService';
 import { settingsService } from '../../services/settingsService';
 import { userService } from '../../services/userService';
 import { transactionService } from '../../services/transactionService';

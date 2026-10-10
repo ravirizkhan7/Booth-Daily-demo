@@ -3,8 +3,8 @@ import { usePOS } from '../hooks/usePOS';
 import { formatRupiah, formatDate } from '../utils/formatters';
 import {
   BarChart3, Download, Calendar, TrendingUp, DollarSign, ShoppingBag, Coffee,
-  Printer, Layers, CreditCard, AlertTriangle, CheckCircle2, ArrowDownLeft,
-  ArrowUpRight, ArrowRightLeft, Clock, User, FileText, ChevronRight, Filter
+  Printer, Layers, CreditCard, AlertTriangle, ArrowDownLeft,
+  ArrowUpRight, ArrowRightLeft, FileText
 } from 'lucide-react';
 import { orderService } from '../services/orderService';
 import { Order } from '../types';

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { User } from '../../types';
 import { userService } from '../../services/userService';
 import { leavePosBooth } from '../../services/echo';
