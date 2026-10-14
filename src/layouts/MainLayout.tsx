@@ -8,6 +8,8 @@ import { LoginModal } from '../components/common/LoginModal';
 import { EditAccountModal } from '../components/common/EditAccountModal';
 import { LogoutConfirmModal } from '../components/common/LogoutConfirmModal';
 import { Toast } from '../components/common/Toast';
+import { OpenShiftModal } from '../components/pos/OpenShiftModal';
+import { CloseShiftModal } from '../components/pos/CloseShiftModal';
 import {
   ShoppingCart,
   LayoutDashboard,
@@ -19,7 +21,8 @@ import {
   History,
   Users,
   BarChart3,
-  Settings
+  Settings,
+  Clock
 } from 'lucide-react';
 
 import { Navbar } from '../components/layout/Navbar';
@@ -47,6 +50,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     { label: 'Stock', path: '/inventory', icon: Boxes, roles: ['owner', 'karyawan'] },
     { label: 'Pembelian', path: '/purchases', icon: ShoppingBag, roles: ['owner'] },
     { label: 'Riwayat Transaksi', path: '/transactions', icon: History, roles: ['owner', 'karyawan'] },
+    { label: 'Shift', path: '/shifts', icon: Clock, roles: ['owner', 'karyawan'] },
     { label: 'Laporan', path: '/reports', icon: BarChart3, roles: ['owner'] },
     { label: 'Karyawan', path: '/employees', icon: Users, roles: ['owner'] },
     { label: 'Pengaturan', path: '/settings', icon: Settings, roles: ['owner'] }
@@ -104,6 +108,8 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       <RecipeModal />
       <PINModal />
       <ReceiptModal />
+      <OpenShiftModal />
+      <CloseShiftModal />
       <Toast />
     </div>
   );

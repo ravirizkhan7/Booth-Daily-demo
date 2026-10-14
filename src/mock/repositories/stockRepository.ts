@@ -26,7 +26,7 @@ export const stockRepository = {
   async updateStock(
     id: string,
     stockData: Partial<Stock>,
-    metadata?: { notes?: string; user_name?: string }
+    metadata?: { notes?: string; user_name?: string; role?: string }
   ): Promise<Stock> {
     return mockStore.updateStock(id, stockData, metadata);
   },

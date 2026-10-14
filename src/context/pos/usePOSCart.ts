@@ -12,15 +12,21 @@ export interface CartItem {
 export interface UsePOSCartProps {
   recipes: Recipe[];
   stocks: Stock[];
+  isShiftActive?: boolean;
   showToast: (message: string, type?: ToastType) => void;
 }
 
-export const usePOSCart = ({ recipes, stocks, showToast }: UsePOSCartProps) => {
+export const usePOSCart = ({ recipes, stocks, isShiftActive = false, showToast }: UsePOSCartProps) => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderType, setOrderType] = useState<OrderType>('dine_in');
   const [customerName, setCustomerName] = useState<string>('');
 
   const addToCart = useCallback((product: Product, quantityToAdd: number = 1) => {
+    if (!isShiftActive) {
+      showToast('Shift kasir belum dibuka. Buka shift kasir terlebih dahulu.', 'info');
+      return;
+    }
+
     if (!product.is_active) {
       showToast('Produk ini sedang tidak aktif', 'error');
       return;
@@ -55,7 +61,7 @@ export const usePOSCart = ({ recipes, stocks, showToast }: UsePOSCartProps) => {
       return [...prevCart, { product, qty: quantityToAdd, notes: '' }];
     });
     showToast(`${product.name} ditambahkan`, 'info');
-  }, [cart, recipes, stocks, showToast]);
+  }, [cart, recipes, stocks, isShiftActive, showToast]);
 
   const updateCartQty = useCallback((productId: string, newQty: number) => {
     if (newQty <= 0) {

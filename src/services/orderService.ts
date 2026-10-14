@@ -1,4 +1,4 @@
-import { Order } from '../types';
+import { Order, PaymentMethod } from '../types';
 import { orderRepository, GetOrdersParams } from '../mock/repositories/orderRepository';
 
 export type { GetOrdersParams };
@@ -16,7 +16,7 @@ export const orderService = {
     return orderRepository.createOrder(orderData, token);
   },
 
-  async refundOrder(id: string, metadata?: { refunded_by_name?: string; refund_reason?: string }): Promise<Order> {
+  async refundOrder(id: string, metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }): Promise<Order> {
     return orderRepository.refundOrder(id, metadata);
   },
 };

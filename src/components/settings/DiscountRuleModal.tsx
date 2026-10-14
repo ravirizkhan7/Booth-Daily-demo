@@ -145,11 +145,12 @@ export const DiscountRuleModal: React.FC<DiscountRuleModalProps> = ({
                 Min. Belanja (Rp)
               </label>
               <NumberInput
+                isCurrency={true}
                 min={0}
-                allowDecimals={false}
                 required
                 value={minimumPurchase}
                 onChange={val => setMinimumPurchase(val)}
+                placeholder="Rp 0"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-stone-900 dark:text-stone-100 focus:outline-hidden focus:border-[#C68B59]"
               />
               <p className="text-[10px] text-stone-400 mt-0.5">Isi 0 untuk tanpa batas min.</p>

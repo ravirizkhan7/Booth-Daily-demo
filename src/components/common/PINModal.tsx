@@ -1,10 +1,11 @@
 import { NumberInput } from './NumberInput';
+import { PinKeypad } from './PinKeypad';
 import React, { useState, useEffect } from 'react';
 import { usePOS } from '../../hooks/usePOS';
 import { PaymentMethod } from '../../types';
 import { formatRupiah } from '../../utils/formatters';
 import { calculateOrderPreview } from '../../utils/orderCalculation';
-import { X, Lock, Delete, QrCode, Banknote, Check, ShieldAlert } from 'lucide-react';
+import { X, Lock, QrCode, Banknote, Check } from 'lucide-react';
 
 export const PINModal: React.FC = () => {
   const {
@@ -49,7 +50,13 @@ export const PINModal: React.FC = () => {
   } = calculateOrderPreview(rawSubtotal, discountRules, settings?.tax_percentage ?? 0);
 
   const parsedAmountPaid = selectedMethod === 'cash'
-    ? (parseFloat(amountPaidInput) || totalAmount)
+    ? (() => {
+        if (!amountPaidInput || !amountPaidInput.trim()) return totalAmount;
+        const clean = amountPaidInput.replace(/\D/g, '');
+        if (!clean) return totalAmount;
+        const num = parseInt(clean, 10);
+        return isNaN(num) || num <= 0 ? totalAmount : num;
+      })()
     : totalAmount;
 
   const changeAmount = Math.max(0, parsedAmountPaid - totalAmount);
@@ -94,7 +101,7 @@ export const PINModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-md animate-fade-in overflow-y-auto">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
       <div
         className="relative w-full max-w-lg bg-[#F7F5F2] dark:bg-[#1A1816] rounded-3xl shadow-2xl border border-stone-300 dark:border-stone-800 overflow-hidden flex flex-col max-h-[92vh] my-auto"
         onClick={e => e.stopPropagation()}
@@ -257,10 +264,10 @@ export const PINModal: React.FC = () => {
                 UANG DITERIMA (CASH)
               </label>
               <NumberInput
-                type="number"
-                value={Number(amountPaidInput) || 0}
+                value={amountPaidInput ? (parseInt(amountPaidInput.replace(/\D/g, ''), 10) || 0) : 0}
                 onChange={val => setAmountPaidInput(val === 0 ? '' : val.toString())}
-                placeholder={`Uang Pas: ${totalAmount}`}
+                isCurrency={true}
+                placeholder={`Uang Pas: ${totalAmount.toLocaleString('id-ID')}`}
                 className="w-full px-4 py-2.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-[#1F1D1B] font-bold text-base text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
               <div className="flex flex-wrap gap-2 pt-0.5">
@@ -297,74 +304,19 @@ export const PINModal: React.FC = () => {
             </div>
           )}
 
-          {/* Verification PIN Section */}
-          <div className="space-y-3 pt-1 border-t border-stone-200 dark:border-stone-800">
-            <div className="text-center space-y-1">
-              <label className="block text-[11px] font-extrabold text-stone-500 dark:text-stone-400 uppercase tracking-wider">
-                VERIFIKASI PIN KARYAWAN / OWNER
-              </label>
-
-              {/* PIN Dots */}
-              <div className="flex justify-center items-center gap-3 my-2">
-                {[0, 1, 2, 3].map(i => (
-                  <div
-                    key={i}
-                    className={`w-4 h-4 rounded-full border-2 transition-all duration-150 ${pin.length > i
-                      ? 'bg-[#3B2A1F] dark:bg-[#D4A373] border-[#3B2A1F] dark:border-[#D4A373] scale-110 shadow-sm'
-                      : 'border-stone-300 dark:border-stone-700 bg-white dark:bg-[#25221F]'
-                      }`}
-                  />
-                ))}
-              </div>
-
-              {currentUser && (
-                <p className="text-[11px] text-stone-500 font-semibold">
-                  Kasir Aktif: <span className="font-bold text-stone-800 dark:text-stone-200">{currentUser.name}</span>
-                </p>
-              )}
-
-              {errorMessage && (
-                <div className="flex items-center justify-center gap-1.5 p-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl text-rose-700 dark:text-rose-300 text-xs font-bold animate-shake mt-2">
-                  <ShieldAlert className="w-4 h-4 shrink-0" />
-                  <span>{errorMessage}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Keypad */}
-            <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
-                <button
-                  key={num}
-                  type="button"
-                  onClick={() => handleKeyClick(num)}
-                  className="py-2.5 bg-white dark:bg-[#25221F] hover:bg-stone-100 dark:hover:bg-[#2F2B27] active:scale-95 text-stone-900 dark:text-[#F7F5F2] font-black text-lg rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm transition-all cursor-pointer"
-                >
-                  {num}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={handleClear}
-                className="py-2.5 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 font-bold text-xs rounded-2xl active:scale-95 transition-all cursor-pointer"
-              >
-                C
-              </button>
-              <button
-                type="button"
-                onClick={() => handleKeyClick('0')}
-                className="py-2.5 bg-white dark:bg-[#25221F] hover:bg-stone-100 dark:hover:bg-[#2F2B27] active:scale-95 text-stone-900 dark:text-[#F7F5F2] font-black text-lg rounded-2xl border border-stone-200 dark:border-stone-800 shadow-sm transition-all cursor-pointer"
-              >
-                0
-              </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                className="py-2.5 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-700 dark:text-stone-300 flex items-center justify-center rounded-2xl active:scale-95 transition-all cursor-pointer"
-              >
-                <Delete className="w-4 h-4" />
-              </button>
-            </div>
+          {/* Verification PIN Section using shared PinKeypad */}
+          <div className="p-4 bg-white dark:bg-[#23201D] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-3 shadow-sm">
+            <PinKeypad
+              pin={pin}
+              onChange={val => {
+                setPin(val);
+                setErrorMessage('');
+              }}
+              errorMessage={errorMessage}
+              label="VERIFIKASI PIN KARYAWAN / OWNER"
+              subtitle={currentUser ? `Kasir Aktif: ${currentUser.name}` : 'Masukkan 4 digit PIN'}
+              disabled={isSubmitting}
+            />
           </div>
         </div>
 

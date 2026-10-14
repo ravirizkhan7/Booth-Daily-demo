@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { usePOS } from '../hooks/usePOS';
-import { Order } from '../types';
+import { Order, PaymentMethod } from '../types';
 import { formatRupiah, formatDate } from '../utils/formatters';
 import { orderService } from '../services/orderService';
 import { History, Search, Printer, RotateCcw, RefreshCw } from 'lucide-react';
@@ -71,18 +71,23 @@ export const TransactionsPage: React.FC = () => {
   });
 
   const [refundReason, setRefundReason] = useState<string>('Batal Pelanggan');
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod>('cash');
 
   const handleConfirmRefund = async () => {
     if (!refundingOrder || isRefunding) return;
+    if (refundingOrder.payment?.status === 'refunded') return;
     setIsRefunding(true);
     try {
       await refundOrder(refundingOrder.id, {
         refund_reason: refundReason,
         refunded_by_name: currentUser?.name || 'Owner',
+        refund_method: refundMethod,
       });
     } finally {
       setIsRefunding(false);
       setRefundingOrder(null);
+      setRefundMethod('cash');
+      setRefundReason('Batal Pelanggan');
     }
   };
 
@@ -278,20 +283,41 @@ export const TransactionsPage: React.FC = () => {
           if (!isRefunding) setRefundingOrder(null);
         }}
       >
-        <div className="text-left pt-1">
-          <label className="block text-[11px] font-bold text-stone-600 dark:text-stone-300 mb-1">
-            Alasan Refund:
-          </label>
-          <select
-            value={refundReason}
-            onChange={e => setRefundReason(e.target.value)}
-            className="w-full px-3 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-200 dark:border-stone-700 text-xs font-semibold focus:outline-none"
-          >
-            <option value="Batal Pelanggan">Batal Pelanggan</option>
-            <option value="Salah Buat">Salah Buat</option>
-            <option value="Komplain Rasa">Komplain Rasa</option>
-            <option value="Lainnya">Lainnya</option>
-          </select>
+        <div className="text-left pt-1 space-y-3">
+          <div>
+            <label className="block text-[11px] font-bold text-stone-600 dark:text-stone-300 mb-1">
+              Metode Pengembalian Dana:
+            </label>
+            <select
+              value={refundMethod}
+              onChange={e => setRefundMethod(e.target.value as PaymentMethod)}
+              className="w-full px-3 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-200 dark:border-stone-700 text-xs font-semibold focus:outline-none"
+            >
+              <option value="cash">Tunai (Uang Laci Kasir)</option>
+              <option value="qris">QRIS / Transfer Non-Tunai</option>
+            </select>
+            <p className="text-[10px] text-stone-400 mt-1">
+              {refundMethod === 'cash'
+                ? 'Uang tunai dikeluarkan dari laci kasir shift aktif saat ini.'
+                : 'Pengembalian non-tunai tidak memotong fisik uang kas laci kasir.'}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-stone-600 dark:text-stone-300 mb-1">
+              Alasan Refund:
+            </label>
+            <select
+              value={refundReason}
+              onChange={e => setRefundReason(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-200 dark:border-stone-700 text-xs font-semibold focus:outline-none"
+            >
+              <option value="Batal Pelanggan">Batal Pelanggan</option>
+              <option value="Salah Buat">Salah Buat</option>
+              <option value="Komplain Rasa">Komplain Rasa</option>
+              <option value="Lainnya">Lainnya</option>
+            </select>
+          </div>
         </div>
       </ConfirmDialog>
     </div>

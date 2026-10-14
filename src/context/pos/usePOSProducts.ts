@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { Product, Category } from '../../types';
 import { productService } from '../../services/productService';
 import { ToastType } from './usePOSToast';
+import { getSecondaryCache } from '../../mock/persistence/storage';
 
 export interface UsePOSProductsProps {
   showToast: (message: string, type?: ToastType) => void;
@@ -9,21 +10,11 @@ export interface UsePOSProductsProps {
 
 export const usePOSProducts = ({ showToast }: UsePOSProductsProps) => {
   const [products, setProducts] = useState<Product[]>(() => {
-    try {
-      const cached = localStorage.getItem('boothdaily_cached_products');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
+    return getSecondaryCache<Product[]>('boothdaily_cached_products') ?? [];
   });
 
   const [categories, setCategories] = useState<Category[]>(() => {
-    try {
-      const cached = localStorage.getItem('boothdaily_cached_categories');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
+    return getSecondaryCache<Category[]>('boothdaily_cached_categories') ?? [];
   });
 
   const [selectedCategory, setSelectedCategory] = useState<string>('cat-all');

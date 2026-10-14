@@ -487,7 +487,8 @@ export const RecipesPage: React.FC = () => {
                           <NumberInput
                             type="number"
                             step="any"
-                            min={0}
+                            min={0.001}
+                            allowDecimals={true}
                             value={ing.amount}
                             onChange={val => handleIngredientChange(idx, 'amount', val)}
                             placeholder="Jumlah"
@@ -499,10 +500,11 @@ export const RecipesPage: React.FC = () => {
                           <label className="block sm:hidden text-[10px] font-bold text-stone-400 mb-0.5">Satuan</label>
                           <input
                             type="text"
+                            readOnly
+                            disabled
                             value={ing.unit}
-                            onChange={e => handleIngredientChange(idx, 'unit', e.target.value)}
-                            placeholder="Satuan"
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-medium text-[11px]"
+                            title="Satuan otomatis mengikuti satuan dasar bahan baku"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 font-bold text-stone-600 dark:text-stone-300 text-[11px] cursor-not-allowed"
                           />
                         </div>
 

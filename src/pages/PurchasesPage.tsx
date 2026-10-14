@@ -1,13 +1,14 @@
 import { NumberInput } from '../components/common/NumberInput';
 import React, { useState } from 'react';
 import { usePOS } from '../hooks/usePOS';
-import { Purchase, PurchaseItem } from '../types';
+import { Purchase, PurchaseItem, Stock } from '../types';
 import { formatRupiah } from '../utils/formatters';
 import {
   ShoppingBag, Plus, Search, Edit2, Trash2, Eye, X,
-  Truck
+  Truck, ArrowRight, PackageCheck, AlertCircle
 } from 'lucide-react';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
+import { validatePackagingConversion } from '../utils/stockUtils';
 
 export const PurchasesPage: React.FC = () => {
   const {
@@ -37,12 +38,9 @@ export const PurchasesPage: React.FC = () => {
 
   // Normalisasi tanggal apapun formatnya (ISO string dengan waktu, Date object,
   // string dari database, dll) jadi "YYYY-MM-DD" biar cocok sama <input type="date">.
-  // Tanpa ini, kalau format tanggal dari backend bukan persis YYYY-MM-DD,
-  // input date akan menolaknya dan tampil kosong.
   const toDateInputValue = (value: any): string => {
     if (!value) return new Date().toISOString().slice(0, 10);
     if (typeof value === 'string') {
-      // Sudah dalam format YYYY-MM-DD, langsung pakai
       if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
       const parsed = new Date(value);
       if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
@@ -58,6 +56,34 @@ export const PurchasesPage: React.FC = () => {
     p.supplier.toLowerCase().includes(search.toLowerCase())
   );
 
+  const createDefaultItem = (stock: Stock): Omit<PurchaseItem, 'id'> => {
+    const defaultPkgUnit = stock.default_package_unit || (stock.unit === 'Gram' ? 'Kg' : stock.unit === 'ml' ? 'Botol' : 'Pak');
+    const defaultConversionRatio = stock.default_package_size !== undefined && stock.default_package_size > 0
+      ? stock.default_package_size
+      : (stock.unit === 'Gram' ? 1000 : stock.unit === 'ml' ? 1000 : 1);
+    const defaultPkgPrice = stock.default_package_price !== undefined && stock.default_package_price > 0
+      ? stock.default_package_price
+      : (stock.cost_per_unit * defaultConversionRatio);
+    const packageQty = 1;
+    const totalBaseQty = packageQty * defaultConversionRatio;
+    const totalCost = packageQty * defaultPkgPrice;
+    const costPerBaseUnit = totalBaseQty > 0 ? totalCost / totalBaseQty : stock.cost_per_unit;
+
+    return {
+      stock_id: stock.id,
+      stock_name: stock.name,
+      package_qty: packageQty,
+      package_unit: defaultPkgUnit,
+      conversion_ratio: defaultConversionRatio,
+      package_price: defaultPkgPrice,
+      qty: totalBaseQty,
+      unit: stock.unit,
+      unit_cost: costPerBaseUnit,
+      total_cost: totalCost,
+      conversion_status: 'verified'
+    };
+  };
+
   const handleOpenAdd = () => {
     setEditingPurchase(null);
     setFormError('');
@@ -66,17 +92,8 @@ export const PurchasesPage: React.FC = () => {
       purchase_number: `PUR-${Date.now().toString().slice(-6)}`,
       supplier: 'CV Jaya Abadi Supplier',
       date: new Date().toISOString().slice(0, 10),
-      items: defaultStock ? [
-        {
-          stock_id: defaultStock.id,
-          stock_name: defaultStock.name,
-          qty: 1000,
-          unit: defaultStock.unit,
-          unit_cost: defaultStock.cost_per_unit,
-          total_cost: 1000 * defaultStock.cost_per_unit
-        }
-      ] : [],
-      notes: '' // notes dikosongkan, user isi manual
+      items: defaultStock ? [createDefaultItem(defaultStock)] : [],
+      notes: ''
     });
     setIsModalOpen(true);
   };
@@ -88,14 +105,24 @@ export const PurchasesPage: React.FC = () => {
       purchase_number: purchase.purchase_number,
       supplier: purchase.supplier,
       date: toDateInputValue(purchase.date),
-      items: purchase.items.map(i => ({
-        stock_id: i.stock_id,
-        stock_name: i.stock_name,
-        qty: i.qty,
-        unit: i.unit,
-        unit_cost: i.unit_cost,
-        total_cost: i.total_cost
-      })),
+      items: purchase.items.map(i => {
+        const stock = stocks.find(s => String(s.id) === String(i.stock_id));
+        const baseUnit = i.unit || (stock ? stock.unit : 'Gram');
+        const hasPkg = i.package_qty !== undefined && i.conversion_ratio !== undefined;
+        return {
+          stock_id: i.stock_id,
+          stock_name: i.stock_name,
+          package_qty: hasPkg ? i.package_qty! : (i.qty || 1),
+          package_unit: hasPkg ? (i.package_unit || 'Kemasan') : baseUnit,
+          conversion_ratio: hasPkg ? i.conversion_ratio! : 1,
+          package_price: hasPkg ? (i.package_price || i.unit_cost) : (i.unit_cost || 0),
+          qty: i.qty,
+          unit: baseUnit,
+          unit_cost: i.unit_cost,
+          total_cost: i.total_cost,
+          conversion_status: i.conversion_status || 'verified'
+        };
+      }),
       notes: purchase.notes || ''
     });
     setIsModalOpen(true);
@@ -113,17 +140,7 @@ export const PurchasesPage: React.FC = () => {
     const defaultStock = stocks[0];
     setFormData(prev => ({
       ...prev,
-      items: [
-        ...prev.items,
-        {
-          stock_id: defaultStock.id,
-          stock_name: defaultStock.name,
-          qty: 1000,
-          unit: defaultStock.unit,
-          unit_cost: defaultStock.cost_per_unit,
-          total_cost: 1000 * defaultStock.cost_per_unit
-        }
-      ]
+      items: [...prev.items, createDefaultItem(defaultStock)]
     }));
   };
 
@@ -135,21 +152,72 @@ export const PurchasesPage: React.FC = () => {
       if (field === 'stock_id') {
         const found = stocks.find(s => s.id != null && value != null && String(s.id) === String(value));
         if (found) {
-          target.stock_id = found.id;
-          target.stock_name = found.name;
-          target.unit = found.unit;
-          target.unit_cost = found.cost_per_unit;
-          target.total_cost = target.qty * found.cost_per_unit;
+          const freshItem = createDefaultItem(found);
+          updated[index] = freshItem;
+          return { ...prev, items: updated };
         }
-      } else if (field === 'qty') {
-        target.qty = Number(value) || 0;
-        target.total_cost = target.qty * target.unit_cost;
-      } else if (field === 'unit_cost') {
-        target.unit_cost = Number(value) || 0;
-        target.total_cost = target.qty * target.unit_cost;
+      } else if (field === 'package_qty') {
+        target.package_qty = Number(value) || 0;
+      } else if (field === 'package_unit') {
+        target.package_unit = String(value);
+      } else if (field === 'conversion_ratio') {
+        target.conversion_ratio = Number(value) || 0;
+      } else if (field === 'package_price') {
+        target.package_price = Number(value) || 0;
       }
 
+      // Hitung ulang konversi stok dan biaya
+      const pkgQty = target.package_qty !== undefined ? target.package_qty : 1;
+      const ratio = target.conversion_ratio !== undefined ? target.conversion_ratio : 1;
+      const pkgPrice = target.package_price !== undefined ? target.package_price : 0;
+
+      const totalBaseQty = pkgQty * ratio;
+      const totalCost = Math.round(pkgQty * pkgPrice);
+      const costPerBaseUnit = totalBaseQty > 0 ? totalCost / totalBaseQty : 0;
+
+      target.qty = totalBaseQty;
+      target.total_cost = totalCost;
+      target.unit_cost = costPerBaseUnit;
+
       updated[index] = target;
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handleSetDirectBaseUnit = (index: number) => {
+    setFormData(prev => {
+      const updated = [...prev.items];
+      const target = { ...updated[index] };
+      const stock = stocks.find(s => String(s.id) === String(target.stock_id));
+      const baseUnit = target.unit || (stock ? stock.unit : 'Gram');
+      const baseCost = stock ? stock.cost_per_unit : target.unit_cost;
+
+      target.package_unit = baseUnit;
+      target.conversion_ratio = 1;
+      target.package_price = baseCost;
+      const pkgQty = target.package_qty || 1;
+      target.qty = pkgQty * 1;
+      target.total_cost = Math.round(pkgQty * baseCost);
+      target.unit_cost = baseCost;
+
+      updated[index] = target;
+      return { ...prev, items: updated };
+    });
+  };
+
+  const handleSetDefaultPackage = (index: number) => {
+    setFormData(prev => {
+      const updated = [...prev.items];
+      const target = { ...updated[index] };
+      const stock = stocks.find(s => String(s.id) === String(target.stock_id));
+      if (stock) {
+        const fresh = createDefaultItem(stock);
+        fresh.package_qty = target.package_qty || 1;
+        fresh.qty = fresh.package_qty * (fresh.conversion_ratio || 1);
+        fresh.total_cost = Math.round(fresh.package_qty * (fresh.package_price || 0));
+        fresh.unit_cost = fresh.qty > 0 ? fresh.total_cost / fresh.qty : fresh.unit_cost;
+        updated[index] = fresh;
+      }
       return { ...prev, items: updated };
     });
   };
@@ -162,7 +230,7 @@ export const PurchasesPage: React.FC = () => {
   };
 
   const calculateTotalAmount = () => {
-    return formData.items.reduce((sum, item) => sum + item.total_cost, 0);
+    return formData.items.reduce((sum, item) => sum + (item.total_cost || 0), 0);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -176,6 +244,34 @@ export const PurchasesPage: React.FC = () => {
       return;
     }
 
+    // Validasi ketat setiap item menggunakan validatePackagingConversion
+    for (let idx = 0; idx < formData.items.length; idx++) {
+      const item = formData.items[idx];
+      const stock = stocks.find(s => String(s.id) === String(item.stock_id));
+      if (!stock) {
+        setFormError(`Item #${idx + 1}: Bahan baku tidak valid`);
+        return;
+      }
+
+      const pkgQty = Number(item.package_qty);
+      const ratio = Number(item.conversion_ratio);
+      const pkgPrice = Number(item.package_price);
+
+      const validation = validatePackagingConversion({
+        stockName: stock.name,
+        baseUnit: stock.unit,
+        packageQty: pkgQty,
+        conversionRatio: ratio,
+        packagePrice: pkgPrice,
+        packageUnit: item.package_unit
+      });
+
+      if (!validation.isValid) {
+        setFormError(`Item #${idx + 1} (${stock.name}): ${validation.error}`);
+        return;
+      }
+    }
+
     const totalAmount = calculateTotalAmount();
 
     const itemsWithIds: PurchaseItem[] = formData.items.map((item, idx) => ({
@@ -183,28 +279,32 @@ export const PurchasesPage: React.FC = () => {
       ...item
     }));
 
-    if (editingPurchase) {
-      await editPurchase(editingPurchase.id, {
-        purchase_number: formData.purchase_number,
-        supplier: formData.supplier,
-        date: formData.date,
-        total_amount: totalAmount,
-        notes: formData.notes,
-        items: itemsWithIds
-      });
-    } else {
-      await addPurchase({
-        purchase_number: formData.purchase_number,
-        supplier: formData.supplier,
-        date: formData.date,
-        total_amount: totalAmount,
-        created_at: new Date().toISOString(),
-        notes: formData.notes,
-        items: itemsWithIds
-      });
-    }
+    try {
+      if (editingPurchase) {
+        await editPurchase(editingPurchase.id, {
+          purchase_number: formData.purchase_number,
+          supplier: formData.supplier,
+          date: formData.date,
+          total_amount: totalAmount,
+          notes: formData.notes,
+          items: itemsWithIds
+        });
+      } else {
+        await addPurchase({
+          purchase_number: formData.purchase_number,
+          supplier: formData.supplier,
+          date: formData.date,
+          total_amount: totalAmount,
+          created_at: new Date().toISOString(),
+          notes: formData.notes,
+          items: itemsWithIds
+        });
+      }
 
-    setIsModalOpen(false);
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setFormError(err.message || 'Gagal menyimpan transaksi pembelian');
+    }
   };
 
   return (
@@ -217,7 +317,7 @@ export const PurchasesPage: React.FC = () => {
             Pembelian & Restok Bahan
           </h1>
           <p className="text-xs text-stone-500 font-medium">
-            Catat pengeluaran belanja bahan baku kopi, susu, cup, dan perlengkapan booth. Stok otomatis bertambah saat dicatat.
+            Catat pembelian kemasan supplier. Stok otomatis dikonversi ke satuan dasar (Gram, ml, Pcs) dan HPP diperbarui secara akurat.
           </p>
         </div>
 
@@ -254,7 +354,7 @@ export const PurchasesPage: React.FC = () => {
                 <th className="p-4">No. Pembelian / Nota</th>
                 <th className="p-4">Supplier / Vendor</th>
                 <th className="p-4">Tanggal Nota</th>
-                <th className="p-4">Rincian Belanja</th>
+                <th className="p-4">Rincian Belanja & Konversi</th>
                 <th className="p-4 text-right">Total Biaya</th>
                 <th className="p-4 text-right">Aksi</th>
               </tr>
@@ -289,14 +389,17 @@ export const PurchasesPage: React.FC = () => {
 
                     <td className="p-4">
                       <div className="flex flex-wrap gap-1">
-                        {pur.items.map(item => (
-                          <span
-                            key={item.id}
-                            className="px-2.5 py-1 rounded-xl bg-stone-100 dark:bg-[#25221F] text-stone-800 dark:text-stone-200 font-bold text-[10px] border border-stone-200 dark:border-stone-800"
-                          >
-                            {item.stock_name}: {item.qty} {item.unit}
-                          </span>
-                        ))}
+                        {pur.items.map(item => {
+                          const hasPkg = item.package_qty !== undefined && item.conversion_ratio !== undefined && item.conversion_ratio !== 1;
+                          return (
+                            <span
+                              key={item.id}
+                              className="px-2.5 py-1 rounded-xl bg-stone-100 dark:bg-[#25221F] text-stone-800 dark:text-stone-200 font-bold text-[10px] border border-stone-200 dark:border-stone-800"
+                            >
+                              {item.stock_name}: {hasPkg ? `${item.package_qty} ${item.package_unit || 'Kemasan'} (${item.qty} ${item.unit})` : `${item.qty} ${item.unit}`}
+                            </span>
+                          );
+                        })}
                       </div>
                     </td>
 
@@ -343,7 +446,7 @@ export const PurchasesPage: React.FC = () => {
       {/* Modal Add / Edit Purchase */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
-          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-xl w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800 my-auto">
+          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-2xl w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800 my-auto">
             <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
               <h3 className="font-extrabold text-base text-stone-900 dark:text-stone-100">
                 {editingPurchase ? 'Edit Catatan Pembelian' : 'Catat Belanja Bahan Baru'}
@@ -351,7 +454,7 @@ export const PurchasesPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
+                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -401,10 +504,10 @@ export const PurchasesPage: React.FC = () => {
               </div>
 
               {/* Dynamic Items list */}
-              <div className="space-y-2.5 p-3.5 bg-stone-50 dark:bg-[#161413] rounded-2xl border border-stone-200 dark:border-stone-800">
+              <div className="space-y-3 p-3.5 bg-stone-50 dark:bg-[#161413] rounded-2xl border border-stone-200 dark:border-stone-800">
                 <div className="flex justify-between items-center">
                   <label className="block font-extrabold text-stone-800 dark:text-stone-200 uppercase text-[11px]">
-                    DAFTAR BARANG DIBELI
+                    DAFTAR BARANG DIBELI & KONVERSI KEMASAN
                   </label>
                   <button
                     type="button"
@@ -419,64 +522,145 @@ export const PurchasesPage: React.FC = () => {
                 {formData.items.length === 0 ? (
                   <p className="text-stone-400 italic text-center py-2">Belum ada barang dibeli.</p>
                 ) : (
-                  formData.items.map((item, idx) => (
-                    <div key={idx} className="space-y-2 bg-white dark:bg-[#1E1C1A] p-3 rounded-xl border border-stone-200 dark:border-stone-800">
-                      <div className="grid grid-cols-12 gap-2 items-center">
-                        <div className="col-span-11">
-                          <label className="block font-bold text-stone-500 text-[10px] mb-0.5">Pilih Bahan Baku</label>
-                          <select
-                            value={item.stock_id}
-                            onChange={e => handleItemChange(idx, 'stock_id', e.target.value)}
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
-                          >
-                            {stocks.map(s => (
-                              <option key={s.id} value={s.id}>{s.name} ({s.unit})</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="col-span-1 text-center pt-3">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItem(idx)}
-                            className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 cursor-pointer"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
+                  formData.items.map((item, idx) => {
+                    const currentStock = stocks.find(s => String(s.id) === String(item.stock_id));
+                    const baseUnit = currentStock ? currentStock.unit : (item.unit || 'Gram');
+                    const isDirectBase = (item.conversion_ratio === 1) && (item.package_unit === baseUnit);
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <div>
-                          <label className="block font-bold text-stone-500 text-[10px]">Jumlah ({item.unit})</label>
-                          <NumberInput
-                            min={0.001}
-                            allowDecimals={true}
-                            value={item.qty}
-                            onChange={val => handleItemChange(idx, 'qty', val)}
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
-                          />
+                    return (
+                      <div key={idx} className="space-y-2.5 bg-white dark:bg-[#1E1C1A] p-3.5 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xs">
+                        {/* Header Item: Select Stock and Action */}
+                        <div className="flex items-center justify-between gap-2 border-b border-stone-100 dark:border-stone-800/80 pb-2">
+                          <div className="flex-1">
+                            <label className="block font-bold text-stone-500 text-[10px] mb-0.5">
+                              Bahan Baku (Satuan Dasar: <strong className="text-[#3B2A1F] dark:text-[#D4A373]">{baseUnit}</strong>)
+                            </label>
+                            <select
+                              value={item.stock_id}
+                              onChange={e => handleItemChange(idx, 'stock_id', e.target.value)}
+                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                            >
+                              {stocks.map(s => (
+                                <option key={s.id} value={s.id}>{s.name} ({s.unit})</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="flex items-center gap-1 pt-3">
+                            <button
+                              type="button"
+                              onClick={() => handleSetDirectBaseUnit(idx)}
+                              title={`Beli langsung dalam satuan dasar (${baseUnit})`}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                                isDirectBase
+                                  ? 'bg-stone-200 dark:bg-stone-700 border-stone-400 dark:border-stone-600 text-stone-900 dark:text-stone-100'
+                                  : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-200'
+                              }`}
+                            >
+                              Beli {baseUnit} Langsung
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSetDefaultPackage(idx)}
+                              title="Gunakan kemasan default supplier"
+                              className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 hover:bg-amber-100 transition-colors cursor-pointer"
+                            >
+                              Kemasan Supplier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItem(idx)}
+                              className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer ml-1"
+                              title="Hapus baris barang ini"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
-                        <div>
-                          <label className="block font-bold text-stone-500 text-[10px]">Harga / {item.unit} (Rp)</label>
-                          <NumberInput
-                            min={0}
-                            allowDecimals={false}
-                            value={item.unit_cost}
-                            onChange={val => handleItemChange(idx, 'unit_cost', val)}
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
-                          />
+                        {/* Package & Conversion Details Input Grid */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          <div>
+                            <label className="block font-bold text-stone-500 text-[10px] mb-0.5">
+                              Jumlah Kemasan
+                            </label>
+                            <NumberInput
+                              min={0.001}
+                              allowDecimals={baseUnit !== 'Pcs'}
+                              value={item.package_qty ?? 1}
+                              onChange={val => handleItemChange(idx, 'package_qty', val)}
+                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-stone-500 text-[10px] mb-0.5">
+                              Label / Satuan Kemasan
+                            </label>
+                            <input
+                              type="text"
+                              value={item.package_unit || ''}
+                              onChange={e => handleItemChange(idx, 'package_unit', e.target.value)}
+                              placeholder="Misal: Kg, Botol, Pak"
+                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-stone-500 text-[10px] mb-0.5">
+                              Isi per Kemasan ({baseUnit})
+                            </label>
+                            <NumberInput
+                              min={0.001}
+                              allowDecimals={baseUnit !== 'Pcs'}
+                              value={item.conversion_ratio ?? 1}
+                              onChange={val => handleItemChange(idx, 'conversion_ratio', val)}
+                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block font-bold text-stone-500 text-[10px] mb-0.5">
+                              Harga / Kemasan (Rp)
+                            </label>
+                            <NumberInput
+                              isCurrency={true}
+                              min={0}
+                              value={item.package_price ?? 0}
+                              onChange={val => handleItemChange(idx, 'package_price', val)}
+                              placeholder="Rp 0"
+                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                            />
+                          </div>
                         </div>
 
-                        <div>
-                          <label className="block font-bold text-stone-500 text-[10px]">Subtotal (Rp)</label>
-                          <div className="w-full px-2.5 py-1.5 rounded-lg bg-stone-100 dark:bg-stone-800 font-black text-[#3B2A1F] dark:text-[#D4A373] text-[11px] truncate">
-                            {formatRupiah(item.total_cost)}
+                        {/* Live Conversion Preview Banner */}
+                        <div className="p-2.5 rounded-xl bg-[#3B2A1F]/5 dark:bg-[#D4A373]/5 border border-[#3B2A1F]/15 dark:border-[#D4A373]/20 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                          <div className="flex items-center gap-1.5 font-bold text-[#3B2A1F] dark:text-[#D4A373]">
+                            <PackageCheck className="w-4 h-4 text-[#C68B59]" />
+                            <span>Hasil Konversi:</span>
+                            <span className="font-semibold text-stone-700 dark:text-stone-300">
+                              {item.package_qty ?? 0} {item.package_unit || 'Kemasan'} × {item.conversion_ratio ?? 0} {baseUnit}
+                            </span>
+                            <ArrowRight className="w-3.5 h-3.5 text-stone-400" />
+                            <span className="px-2 py-0.5 rounded-lg bg-[#3B2A1F] text-[#F7F5F2] font-black text-xs">
+                              +{item.qty ?? 0} {baseUnit}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-stone-500 font-medium">
+                              Modal: <strong className="text-stone-800 dark:text-stone-200">{formatRupiah(item.unit_cost ?? 0)}/{baseUnit}</strong>
+                            </span>
+                            <span className="text-stone-300 dark:text-stone-700">|</span>
+                            <span className="text-stone-500 font-medium">
+                              Subtotal: <strong className="text-[#3B2A1F] dark:text-[#D4A373] font-black">{formatRupiah(item.total_cost ?? 0)}</strong>
+                            </span>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
@@ -501,14 +685,17 @@ export const PurchasesPage: React.FC = () => {
               </div>
 
               {formError && (
-                <p className="text-rose-600 font-bold text-xs">{formError}</p>
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
               )}
 
               <div className="flex flex-col-reverse sm:flex-row justify-end gap-2.5 pt-3 border-t border-stone-100 dark:border-stone-800">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors"
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
@@ -527,7 +714,7 @@ export const PurchasesPage: React.FC = () => {
       {/* Modal Detail View */}
       {viewingPurchase && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
+          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
             <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
               <div>
                 <h3 className="font-extrabold text-base text-stone-900 dark:text-stone-100">
@@ -538,7 +725,7 @@ export const PurchasesPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setViewingPurchase(null)}
-                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
+                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -558,19 +745,30 @@ export const PurchasesPage: React.FC = () => {
               )}
 
               <div className="space-y-2">
-                <p className="font-extrabold text-stone-500 uppercase text-[10px]">Barang Yang Dibeli:</p>
+                <p className="font-extrabold text-stone-500 uppercase text-[10px]">Barang Yang Dibeli & Konversi Stok:</p>
                 <div className="divide-y divide-stone-100 dark:divide-stone-800 border border-stone-200 dark:border-stone-800 rounded-2xl overflow-hidden">
-                  {viewingPurchase.items.map(item => (
-                    <div key={item.id} className="p-3 flex justify-between items-center bg-white dark:bg-[#1E1C1A]">
-                      <div>
-                        <p className="font-bold text-stone-900 dark:text-stone-100">{item.stock_name}</p>
-                        <p className="text-[10px] text-stone-400">{item.qty} {item.unit} @ {formatRupiah(item.unit_cost)}</p>
+                  {viewingPurchase.items.map(item => {
+                    const hasPkg = item.package_qty !== undefined && item.conversion_ratio !== undefined && item.conversion_ratio !== 1;
+                    return (
+                      <div key={item.id} className="p-3 flex justify-between items-center bg-white dark:bg-[#1E1C1A]">
+                        <div>
+                          <p className="font-bold text-stone-900 dark:text-stone-100">{item.stock_name}</p>
+                          {hasPkg ? (
+                            <p className="text-[10px] text-stone-500">
+                              {item.package_qty} {item.package_unit || 'Kemasan'} × {item.conversion_ratio} {item.unit} = <span className="font-bold text-stone-700 dark:text-stone-300">+{item.qty} {item.unit}</span> @ {formatRupiah(item.package_price || 0)} (Modal: {formatRupiah(item.unit_cost)}/{item.unit})
+                            </p>
+                          ) : (
+                            <p className="text-[10px] text-stone-400">
+                              +{item.qty} {item.unit} @ {formatRupiah(item.unit_cost)}/{item.unit}
+                            </p>
+                          )}
+                        </div>
+                        <span className="font-extrabold text-[#3B2A1F] dark:text-[#D4A373]">
+                          {formatRupiah(item.total_cost)}
+                        </span>
                       </div>
-                      <span className="font-extrabold text-[#3B2A1F] dark:text-[#D4A373]">
-                        {formatRupiah(item.total_cost)}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -584,7 +782,7 @@ export const PurchasesPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setViewingPurchase(null)}
-                className="w-full py-2.5 rounded-xl bg-stone-200 dark:bg-stone-800 text-stone-800 dark:text-stone-200 font-bold"
+                className="w-full py-2.5 rounded-xl bg-stone-200 dark:bg-stone-800 text-stone-800 dark:text-stone-200 font-bold cursor-pointer"
               >
                 Tutup
               </button>

@@ -4,7 +4,7 @@ import { usePOS } from '../../hooks/usePOS';
 import { formatRupiah } from '../../utils/formatters';
 import { getProductStockInfo } from '../../utils/stockUtils';
 import { getImageUrl } from '../../utils/axios';
-import { Heart, BookOpen, Sparkles, Coffee } from 'lucide-react';
+import { Heart, BookOpen, Sparkles, Coffee, Lock } from 'lucide-react';
 
 interface ProductCardProps {
   product: Product;
@@ -12,7 +12,16 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product, priority = false }) => {
-  const { addToCart, toggleFavorite, openRecipeModal, cart, recipes, stocks } = usePOS();
+  const {
+    addToCart,
+    toggleFavorite,
+    openRecipeModal,
+    cart,
+    recipes,
+    stocks,
+    isShiftActive,
+    openOpenShiftModal,
+  } = usePOS();
 
   const cartItem = cart.find(item => item.product.id === product.id);
   const currentQty = cartItem ? cartItem.qty : 0;
@@ -22,11 +31,23 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, priority = fa
   return (
     <div
       onClick={() => {
+        if (!isShiftActive) {
+          openOpenShiftModal();
+          return;
+        }
         if (!stockInfo.isOut) {
           addToCart(product);
         }
       }}
-      title={stockInfo.isOut ? (stockInfo.isOngoing ? 'Produk masih dalam proses konfigurasi resep.' : 'Stok habis, silakan lakukan pembelian atau update stok.') : ''}
+      title={
+        !isShiftActive
+          ? 'Shift kasir belum dibuka. Klik untuk buka shift.'
+          : stockInfo.isOut
+          ? stockInfo.isOngoing
+            ? 'Produk masih dalam proses konfigurasi resep.'
+            : 'Stok habis, silakan lakukan pembelian atau update stok.'
+          : ''
+      }
       className={`group relative bg-white dark:bg-[#1E1C1A] rounded-[16px] p-3 border shadow-sm transition-all duration-200 flex flex-col justify-between select-none ${stockInfo.isOut
         ? 'opacity-60 cursor-not-allowed border-stone-200 dark:border-stone-800'
         : 'border-transparent hover:border-[#3B2A1F] dark:hover:border-[#D4A373] hover:shadow-md cursor-pointer'
@@ -61,9 +82,21 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, priority = fa
 
             {/* Stock Badge */}
             <span
-              className={`px-2 py-0.5 rounded-full text-[9px] font-black border backdrop-blur-md shadow-sm ${stockInfo.badgeColorClass}`}
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-tight border backdrop-blur-sm shadow-xs ${stockInfo.badgeColorClass}`}
             >
-              {stockInfo.label}
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                  stockInfo.status === 'HABIS'
+                    ? 'bg-rose-500'
+                    : stockInfo.status === 'SISA_SEDIKIT' || stockInfo.status === 'MENIPIS'
+                    ? 'bg-amber-500'
+                    : stockInfo.status === 'AMAN'
+                    ? 'bg-emerald-500'
+                    : 'bg-stone-400'
+                }`}
+                aria-hidden="true"
+              />
+              <span className="leading-tight">{stockInfo.label}</span>
             </span>
           </div>
 
@@ -122,20 +155,35 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, priority = fa
 
           <button
             type="button"
-            disabled={stockInfo.isOut}
+            disabled={stockInfo.isOut && isShiftActive}
             onClick={(e) => {
               e.stopPropagation();
+              if (!isShiftActive) {
+                openOpenShiftModal();
+                return;
+              }
               if (!stockInfo.isOut) {
                 addToCart(product);
               }
             }}
-            className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-base shadow-sm transition-all ${stockInfo.isOut
-              ? 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed shadow-none'
-              : 'bg-[#3B2A1F] hover:bg-[#2A1E16] active:scale-95 text-[#F7F5F2] cursor-pointer'
-              }`}
-            title={stockInfo.isOut ? (stockInfo.isOngoing ? 'Produk masih dalam proses konfigurasi resep.' : 'Stok habis, silakan lakukan pembelian atau update stok.') : 'Tambah ke Keranjang'}
+            className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold text-base shadow-sm transition-all ${
+              !isShiftActive
+                ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 hover:bg-amber-500/30 cursor-pointer'
+                : stockInfo.isOut
+                ? 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed shadow-none'
+                : 'bg-[#3B2A1F] hover:bg-[#2A1E16] active:scale-95 text-[#F7F5F2] cursor-pointer'
+            }`}
+            title={
+              !isShiftActive
+                ? 'Buka shift untuk menambah pesanan'
+                : stockInfo.isOut
+                ? stockInfo.isOngoing
+                  ? 'Produk masih dalam proses konfigurasi resep.'
+                  : 'Stok habis, silakan lakukan pembelian atau update stok.'
+                : 'Tambah ke Keranjang'
+            }
           >
-            +
+            {!isShiftActive ? <Lock className="w-3.5 h-3.5" /> : '+'}
           </button>
         </div>
       </div>

@@ -505,6 +505,7 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
     // Place a test order first
     const coffeeBefore = mockStore.getStockById('stk-coffee-beans')?.current_amount ?? 0;
     const testOwnerPin = await userService.verifyPin('1234');
+    await mockStore.openShift(100000, testOwnerPin!.user);
 
     const refundTestOrder = await transactionService.processTransaction({
       order_type: 'dine_in',

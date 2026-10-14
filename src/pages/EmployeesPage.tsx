@@ -1,9 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { usePOS } from '../hooks/usePOS';
 import { User } from '../types';
 import { userService } from '../services/userService';
-import { Users, Plus, KeyRound, Edit2, Trash2, X, User as UserIcon } from 'lucide-react';
+import {
+  Users,
+  Plus,
+  KeyRound,
+  Edit2,
+  Trash2,
+  X,
+  User as UserIcon,
+  RefreshCw,
+  AlertTriangle,
+  Check,
+  ShieldCheck,
+  Copy
+} from 'lucide-react';
 import { ImageUpload } from '../components/common/ImageUpload';
+import { generateUniquePin, isPinUnique, findPinConflicts } from '../utils/pinUtils';
 
 const DEFAULT_PASSWORD = 'demo123';
 
@@ -19,11 +33,16 @@ export const EmployeesPage: React.FC = () => {
   const [resetPassword, setResetPassword] = useState(false);
   const [role, setRole] = useState<'owner' | 'karyawan'>('karyawan');
   const [pin, setPin] = useState('');
+  const [pinFeedback, setPinFeedback] = useState('');
   const [phone, setPhone] = useState('');
   const [isActive, setIsActive] = useState(true);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [savedPinModal, setSavedPinModal] = useState<{ name: string; pin: string } | null>(null);
+
+  // Check for any legacy duplicate PIN conflicts in stored data
+  const pinConflicts = useMemo(() => findPinConflicts(usersList), [usersList]);
 
   const getErrorMessage = (err: any) => {
     return (
@@ -31,6 +50,20 @@ export const EmployeesPage: React.FC = () => {
       err?.message ||
       'Terjadi kesalahan saat memproses data karyawan.'
     );
+  };
+
+  const handleRandomizePin = () => {
+    try {
+      const candidate = generateUniquePin(usersList, editingUser?.id, editingUser?.pin, pin);
+      setPin(candidate);
+      setPinFeedback(`Kandidat PIN unik baru: ${candidate}`);
+      setFormError('');
+      showToast(`Kandidat PIN baru (${candidate}) dibuat. Klik Simpan untuk menerapkan.`, 'info');
+    } catch (err: any) {
+      const msg = err.message || 'Gagal menghasilkan PIN unik.';
+      setFormError(msg);
+      showToast(msg, 'error');
+    }
   };
 
   const handleOpenAdd = () => {
@@ -41,7 +74,14 @@ export const EmployeesPage: React.FC = () => {
     setPassword(DEFAULT_PASSWORD);
     setResetPassword(false);
     setRole('karyawan');
-    setPin(String(Math.floor(1000 + Math.random() * 9000)));
+    try {
+      const initialCandidate = generateUniquePin(usersList);
+      setPin(initialCandidate);
+      setPinFeedback('PIN acak baru dibuat otomatis.');
+    } catch {
+      setPin('');
+      setPinFeedback('');
+    }
     setPhone('');
     setIsActive(true);
     setAvatarFile(null);
@@ -57,7 +97,8 @@ export const EmployeesPage: React.FC = () => {
     setPassword(DEFAULT_PASSWORD);
     setResetPassword(false);
     setRole(u.role);
-    setPin(u.pin || '');
+    setPin(''); // Read-only form; empty indicates PIN will remain unchanged unless randomized
+    setPinFeedback('');
     setPhone(u.phone || '');
     setIsActive(u.is_active ?? true);
     setAvatarFile(null);
@@ -69,6 +110,7 @@ export const EmployeesPage: React.FC = () => {
     if (isSubmitting) return;
     setIsModalOpen(false);
     setFormError('');
+    setPinFeedback('');
     setResetPassword(false);
   };
 
@@ -121,14 +163,28 @@ export const EmployeesPage: React.FC = () => {
       return;
     }
 
-    if (!editingUser && !/^\d{4}$/.test(cleanPin)) {
-      setFormError('PIN wajib tepat 4 digit.');
-      return;
-    }
-
-    if (editingUser && cleanPin && !/^\d{4}$/.test(cleanPin)) {
-      setFormError('PIN baru harus tepat 4 digit.');
-      return;
+    if (!editingUser) {
+      if (!cleanPin || !/^\d{4}$/.test(cleanPin)) {
+        setFormError('PIN wajib tepat 4 digit angka.');
+        return;
+      }
+      if (!isPinUnique(cleanPin, usersList)) {
+        setFormError(`PIN "${cleanPin}" sudah digunakan oleh akun lain. Silakan klik tombol acak untuk mendapatkan PIN unik.`);
+        return;
+      }
+    } else if (cleanPin) {
+      if (!/^\d{4}$/.test(cleanPin)) {
+        setFormError('PIN baru harus tepat 4 digit angka.');
+        return;
+      }
+      if (editingUser.pin && cleanPin === editingUser.pin) {
+        setFormError('PIN baru harus berbeda dari PIN lama. Silakan klik tombol acak.');
+        return;
+      }
+      if (!isPinUnique(cleanPin, usersList, editingUser.id)) {
+        setFormError(`PIN "${cleanPin}" sudah digunakan oleh akun lain. Silakan klik tombol acak.`);
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -150,12 +206,17 @@ export const EmployeesPage: React.FC = () => {
           avatarFile
         );
 
-        showToast(
-          resetPassword
-            ? 'Data karyawan berhasil diperbarui dan password direset'
-            : 'Data karyawan berhasil diperbarui',
-          'success'
-        );
+        if (cleanPin) {
+          setSavedPinModal({ name: cleanName, pin: cleanPin });
+          showToast(`Data staf "${cleanName}" diperbarui. PIN Baru: ${cleanPin}`, 'success');
+        } else {
+          showToast(
+            resetPassword
+              ? 'Data karyawan berhasil diperbarui dan password direset'
+              : 'Data karyawan berhasil diperbarui',
+            'success'
+          );
+        }
       } else {
         await userService.createUser(
           {
@@ -171,7 +232,8 @@ export const EmployeesPage: React.FC = () => {
           avatarFile
         );
 
-        showToast('Karyawan baru berhasil ditambahkan', 'success');
+        setSavedPinModal({ name: cleanName, pin: cleanPin });
+        showToast(`Karyawan baru "${cleanName}" ditambahkan. PIN Kasir: ${cleanPin}`, 'success');
       }
 
       await refreshData();
@@ -188,6 +250,24 @@ export const EmployeesPage: React.FC = () => {
 
   return (
     <div className="p-3.5 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
+      {/* Banner Peringatan Konflik PIN Lama (jika terdeteksi duplikat pada storage) */}
+      {pinConflicts.length > 0 && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs font-semibold flex items-start gap-3 shadow-sm animate-fade-in">
+          <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-extrabold text-sm text-amber-950 dark:text-amber-100">
+              Perhatian: Ditemukan PIN Duplikat pada Akun Staf
+            </p>
+            <p className="text-amber-800 dark:text-amber-300">
+              {pinConflicts.map(c => `PIN "${c.pin}" digunakan bersama oleh [${c.userNames.join(', ')}]`).join('; ')}.
+            </p>
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
+              Autentikasi akun yang berkonflik ditolak sistem untuk keamanan. Silakan klik tombol edit dan gunakan tombol acak PIN untuk memperbarui PIN unik.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-black text-stone-900 dark:text-stone-100 flex items-center gap-2">
@@ -263,8 +343,9 @@ export const EmployeesPage: React.FC = () => {
                 PIN Kasir:
               </span>
 
-              <span className="font-mono font-black text-sm tracking-widest text-stone-900 dark:text-stone-100">
-                {u.pin || '••••'}
+              {/* Seluruh PIN pengguna dimask untuk menjaga kerahasiaan keamanan */}
+              <span className="font-mono font-black text-sm tracking-widest text-stone-600 dark:text-stone-400">
+                ••••
               </span>
             </div>
 
@@ -418,21 +499,41 @@ export const EmployeesPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-stone-700 dark:text-stone-300 mb-1">
-                    PIN 4 Digit {!editingUser && <span className="text-rose-500">*</span>}
-                  </label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block font-bold text-stone-700 dark:text-stone-300">
+                      PIN 4 Digit {!editingUser && <span className="text-rose-500">*</span>}
+                    </label>
+                    <span className="text-[10px] text-stone-400 font-medium">Read-Only</span>
+                  </div>
 
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={4}
-                    value={pin}
-                    onChange={e =>
-                      setPin(e.target.value.replace(/\D/g, '').slice(0, 4))
-                    }
-                    placeholder={editingUser ? 'Kosongkan jika tidak diubah' : '1234'}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-mono font-black text-center text-sm focus:outline-none focus:ring-2 focus:ring-[#3B2A1F]"
-                  />
+                  <div className="relative flex items-center">
+                    <input
+                      type="text"
+                      readOnly
+                      value={pin}
+                      placeholder={editingUser ? '•••• (Klik acak untuk ganti PIN)' : '1234'}
+                      className="w-full pl-3.5 pr-12 py-2.5 rounded-xl bg-stone-100 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-mono font-black text-center text-sm tracking-widest text-stone-900 dark:text-stone-100 cursor-not-allowed select-all focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRandomizePin}
+                      title="Acak PIN Unik Baru"
+                      className="absolute right-1.5 p-2 rounded-lg text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white hover:bg-stone-200 dark:hover:bg-stone-700 transition-all cursor-pointer active:rotate-180 duration-200"
+                      aria-label="Acak PIN Unik"
+                    >
+                      <RefreshCw className="w-4 h-4 text-[#C68B59]" />
+                    </button>
+                  </div>
+
+                  {pinFeedback ? (
+                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1.5 flex items-center gap-1">
+                      <Check className="w-3 h-3" /> {pinFeedback}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-stone-400 mt-1.5">
+                      PIN diacak sistem. Klik tombol ikon refresh di dalam input untuk mengacak PIN unik baru.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -502,6 +603,57 @@ export const EmployeesPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi PIN Baru untuk Administrator */}
+      {savedPinModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-600 dark:text-emerald-400">
+              <ShieldCheck className="w-6 h-6" />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="font-black text-base text-stone-900 dark:text-stone-100">
+                PIN Baru Berhasil Disimpan
+              </h3>
+              <p className="text-xs text-stone-500">
+                Berikan 4 digit PIN ini kepada <strong>{savedPinModal.name}</strong> untuk otorisasi transaksi dan shift kasir.
+              </p>
+            </div>
+
+            <div className="p-4 bg-stone-100 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800">
+              <span className="text-[10px] uppercase font-bold text-stone-400 tracking-wider block mb-1">
+                PIN KASIR AKTIF
+              </span>
+              <span className="font-mono font-black text-3xl tracking-widest text-[#C68B59]">
+                {savedPinModal.pin}
+              </span>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(savedPinModal.pin);
+                  showToast('PIN berhasil disalin ke clipboard!', 'info');
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl border border-stone-200 dark:border-stone-700 text-xs font-bold text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Salin PIN</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSavedPinModal(null)}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] text-xs font-black transition-colors cursor-pointer"
+              >
+                Mengerti
+              </button>
+            </div>
           </div>
         </div>
       )}

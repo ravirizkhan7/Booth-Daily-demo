@@ -35,18 +35,21 @@ export function findBestPromo(subtotal: number, rules: DiscountRule[] = []): Dis
 
 /**
  * Pure calculation helper replicating the exact backend formula:
- * 1. Subtotal = sum(price * qty)
- * 2. Discount = round(subtotal * (discount_percentage / 100), 2)
- * 3. Taxable Amount = max(0, subtotal - discount)
- * 4. Tax = round(taxableAmount * (tax_percentage / 100), 2)
- * 5. Total Amount = round(taxableAmount + tax, 2)
+ * 1. Subtotal = round(sum(price * qty)) (Integer Rupiah)
+ * 2. Discount = round(subtotal * (discount_percentage / 100)) (Integer Rupiah)
+ * 3. Taxable Amount = max(0, subtotal - discount) (Integer Rupiah)
+ * 4. Tax = round(taxableAmount * (tax_percentage / 100)) (Integer Rupiah)
+ * 5. Total Amount = taxableAmount + tax (Integer Rupiah)
+ *
+ * Persentase pajak dan diskon tetap mendukung dan mempertahankan nilai desimal (misal 11.5% atau 10.5%),
+ * namun seluruh nominal transaksi Rupiah dibulatkan menjadi bilangan bulat (integer) untuk mencegah pecahan sen fisik.
  */
 export function calculateOrderPreview(
   subtotal: number,
   discountRules: DiscountRule[] = [],
   taxPercentage: number = 0
 ): OrderPreviewResult {
-  const cleanSubtotal = Math.round((Number(subtotal) || 0) * 100) / 100;
+  const cleanSubtotal = Math.round(Number(subtotal) || 0);
   const bestPromo = findBestPromo(cleanSubtotal, discountRules);
 
   let discount = 0;
@@ -55,14 +58,14 @@ export function calculateOrderPreview(
 
   if (bestPromo) {
     discountPercentage = Number(bestPromo.discount_percentage) || 0;
-    discount = Math.round(cleanSubtotal * (discountPercentage / 100) * 100) / 100;
+    discount = Math.round(cleanSubtotal * (discountPercentage / 100));
     discountName = bestPromo.name;
   }
 
   const taxableAmount = Math.max(0, cleanSubtotal - discount);
   const cleanTaxPercentage = Number(taxPercentage) || 0;
-  const tax = Math.round(taxableAmount * (cleanTaxPercentage / 100) * 100) / 100;
-  const totalAmount = Math.round((taxableAmount + tax) * 100) / 100;
+  const tax = Math.round(taxableAmount * (cleanTaxPercentage / 100));
+  const totalAmount = taxableAmount + tax;
 
   return {
     subtotal: cleanSubtotal,

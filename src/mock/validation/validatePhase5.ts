@@ -58,6 +58,9 @@ export async function validatePhase5(): Promise<{ pass: boolean; errors: string[
       errors.push('[Guest] PIN verification failed for cashier 5678');
     }
 
+    // Ensure shift is opened before guest transaction
+    await mockStore.openShift(100000, dindaPin!.user);
+
     const guestOrder = await transactionService.processTransaction({
       order_type: 'take_away',
       items: [

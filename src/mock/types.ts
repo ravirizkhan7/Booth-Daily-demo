@@ -9,6 +9,7 @@ import {
   Purchase,
   DiscountRule,
   Settings,
+  Shift,
 } from '../types';
 
 export interface MockStoreState {
@@ -22,4 +23,6 @@ export interface MockStoreState {
   purchases: Purchase[];
   discountRules: DiscountRule[];
   settings: Settings;
+  shifts: Shift[];
+  activeShiftId: string | null;
 }

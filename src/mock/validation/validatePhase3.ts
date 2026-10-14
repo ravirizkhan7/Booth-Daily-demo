@@ -39,6 +39,9 @@ export async function validatePhase3(): Promise<{ pass: boolean; errors: string[
       errors.push('[Auth] Invalid PIN 0000 should return null');
     }
 
+    // Open shift for transaction tests
+    await mockStore.openShift(100000, pinDinda!.user);
+
     // 2. INSUFFICIENT CASH PAYMENT REJECTION TEST
     try {
       await transactionService.processTransaction({
@@ -238,7 +241,7 @@ export async function validatePhase3(): Promise<{ pass: boolean; errors: string[
     // 7. Clean up and restore state
     mockStore.resetMockStore();
   } catch (err: any) {
-    errors.push(`[Fatal] Unexpected exception during Phase 3 validation: ${err.message || err}`);
+    errors.push(`[Fatal] Unexpected exception during Phase 3 validation: ${err.stack || err.message || err}`);
     mockStore.resetMockStore();
   }
 

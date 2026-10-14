@@ -4,7 +4,7 @@ import { formatRupiah, formatDate } from '../utils/formatters';
 import {
   BarChart3, Download, Calendar, TrendingUp, DollarSign, ShoppingBag, Coffee,
   Printer, Layers, CreditCard, AlertTriangle, ArrowDownLeft,
-  ArrowUpRight, ArrowRightLeft, FileText
+  ArrowUpRight, ArrowRightLeft, FileText, RotateCcw, Banknote, QrCode, Info
 } from 'lucide-react';
 import { orderService } from '../services/orderService';
 import { Order } from '../types';
@@ -14,7 +14,7 @@ export const ReportsPage: React.FC = () => {
   const { orders, products, stocks, purchases, recipes, settings, currentUser, showToast, openReceiptModal } = usePOS();
 
   const [dateFilter, setDateFilter] = useState<DateFilterType>('month');
-  const [activeTab, setActiveTab] = useState<'all' | 'sales' | 'purchases' | 'transactions'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'sales' | 'purchases' | 'transactions' | 'refunds'>('all');
 
   const [startDate, setStartDate] = useState<string>(() => {
     const d = new Date();
@@ -53,6 +53,7 @@ export const ReportsPage: React.FC = () => {
         const fetchedOrders = await orderService.getOrders({
           start_date: startStr,
           end_date: endStr,
+          include_refunds_in_range: true,
         });
 
         if (!isCancelled) {
@@ -240,7 +241,8 @@ export const ReportsPage: React.FC = () => {
               { id: 'all', label: 'Semua (Ringkasan Lengkap)' },
               { id: 'sales', label: 'Analisis Penjualan & Menu' },
               { id: 'purchases', label: 'Pembelian & Restok' },
-              { id: 'transactions', label: 'Detail Transaksi Penjualan' }
+              { id: 'transactions', label: 'Detail Transaksi Penjualan' },
+              { id: 'refunds', label: `Daftar Refund (${reportData.refundCount})` }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -307,9 +309,26 @@ export const ReportsPage: React.FC = () => {
           <p className="text-2xl font-black text-[#3B2A1F] dark:text-[#D4A373]">
             {formatRupiah(reportData.totalEstimatedHPP)}
           </p>
-          <p className="text-[11px] text-stone-500 font-semibold pt-1 border-t border-stone-100 dark:border-stone-800/60">
-            Estimasi biaya bahan menu terjual
-          </p>
+          <div className="pt-1 border-t border-stone-100 dark:border-stone-800/60 flex flex-wrap items-center justify-between gap-1 text-[11px] text-stone-500 font-semibold">
+            <span>Estimasi biaya bahan menu terjual</span>
+            <div className="flex flex-wrap items-center gap-1">
+              {reportData.hppLegacyEstimateOrdersCount > 0 && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                  Estimasi Legacy ({reportData.hppLegacyEstimateOrdersCount})
+                </span>
+              )}
+              {reportData.hppPartialSnapshotOrdersCount > 0 && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300">
+                  Snapshot Total · Item Estimasi ({reportData.hppPartialSnapshotOrdersCount})
+                </span>
+              )}
+              {(reportData.hppSnapshotOrdersCount > 0 || (!reportData.hasLegacyEstimatedHPP && !reportData.hasPartialSnapshotHPP)) && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                  Snapshot Riil ({reportData.hppSnapshotOrdersCount})
+                </span>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Card 4: ESTIMASI LABA KOTOR */}
@@ -356,15 +375,38 @@ export const ReportsPage: React.FC = () => {
               <p className="text-[10px] text-emerald-700/80 font-medium">Dari {reportData.totalOrdersCount} transaksi kasir</p>
             </div>
 
-            <div className="p-4 bg-rose-500/10 rounded-2xl border border-rose-500/20 space-y-1">
+            <div className="p-4 bg-rose-500/10 rounded-2xl border border-rose-500/20 space-y-2">
               <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700 dark:text-rose-400">
                 <ArrowUpRight className="w-4 h-4" />
-                <span>Uang Keluar (Belanja Restok)</span>
+                <span>Uang Keluar (Belanja & Refund)</span>
               </div>
               <p className="text-xl font-black text-rose-800 dark:text-rose-300">
                 -{formatRupiah(reportData.cashOut)}
               </p>
-              <p className="text-[10px] text-rose-700/80 font-medium">Dari {reportData.totalPurchasesCount} nota belanja bahan</p>
+              <div className="space-y-0.5 text-[10px] text-rose-700/90 font-semibold border-t border-rose-500/20 pt-1.5">
+                <div className="flex justify-between">
+                  <span>Belanja Bahan ({reportData.totalPurchasesCount} Nota):</span>
+                  <span>{formatRupiah(reportData.totalPurchases)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Refund Tunai:</span>
+                  <span>{formatRupiah(reportData.cashRefunds)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Refund QRIS / Non-Tunai:</span>
+                  <span>{formatRupiah(reportData.qrisRefunds)}</span>
+                </div>
+                {reportData.unknownRefunds > 0 && (
+                  <div className="flex justify-between text-stone-500 dark:text-stone-400">
+                    <span>Refund Data Lama:</span>
+                    <span>{formatRupiah(reportData.unknownRefunds)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-black border-t border-rose-500/20 pt-0.5 text-rose-900 dark:text-rose-200">
+                  <span>Total Refund ({reportData.refundCount} Transaksi):</span>
+                  <span>{formatRupiah(reportData.totalRefunds)}</span>
+                </div>
+              </div>
             </div>
 
             <div className="p-4 bg-[#3B2A1F]/10 dark:bg-[#D4A373]/10 rounded-2xl border border-[#3B2A1F]/20 dark:border-[#D4A373]/20 space-y-1">
@@ -375,12 +417,12 @@ export const ReportsPage: React.FC = () => {
               <p className={`text-xl font-black ${reportData.netCashFlow >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'}`}>
                 {reportData.netCashFlow >= 0 ? '+' : ''}{formatRupiah(reportData.netCashFlow)}
               </p>
-              <p className="text-[10px] text-stone-500 font-medium">Uang masuk dikurangi belanja bahan</p>
+              <p className="text-[10px] text-stone-500 font-medium">Uang masuk dikurangi belanja bahan & total refund</p>
             </div>
           </div>
 
           <div className="p-3 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 text-[11px] text-stone-500 font-medium">
-            💡 <span className="font-bold text-stone-700 dark:text-stone-300">Catatan Arus Kas:</span> Selisih Arus Kas menunjukkan perbedaan uang masuk dari penjualan dan uang keluar untuk pembelian bahan selama periode laporan, bukan laba bersih (belum termasuk biaya operasional lain seperti sewa atau listrik).
+            <Info className="w-4 h-4 text-amber-600 shrink-0 inline-block mr-1 align-text-bottom" /> <span className="font-bold text-stone-700 dark:text-stone-300">Catatan Arus Kas:</span> Angka uang masuk, uang keluar, dan selisih arus kas merupakan gabungan operasional kas fisik dan rekening non-tunai (bank/QRIS), bukan saldo fisik laci kasir (rekonsiliasi uang fisik laci kasir dicatat pada modul Shift Kasir). Selisih arus kas belum mencakup beban operasional lain seperti sewa, listrik, atau gaji.
           </div>
         </div>
       )}
@@ -401,7 +443,8 @@ export const ReportsPage: React.FC = () => {
               <div className="p-3.5 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
                 <div>
                   <p className="font-extrabold text-stone-800 dark:text-stone-200 text-sm flex items-center gap-2">
-                    💵 Tunai (Cash)
+                    <Banknote className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Tunai (Cash)</span>
                   </p>
                   <p className="text-stone-400 text-[11px] font-semibold">{reportData.paymentBreakdown.cash.count} Transaksi</p>
                 </div>
@@ -418,7 +461,8 @@ export const ReportsPage: React.FC = () => {
               <div className="p-3.5 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
                 <div>
                   <p className="font-extrabold text-stone-800 dark:text-stone-200 text-sm flex items-center gap-2">
-                    📱 QRIS / E-Wallet
+                    <QrCode className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>QRIS / E-Wallet</span>
                   </p>
                   <p className="text-stone-400 text-[11px] font-semibold">{reportData.paymentBreakdown.qris.count} Transaksi</p>
                 </div>
@@ -436,7 +480,8 @@ export const ReportsPage: React.FC = () => {
                 <div className="p-3.5 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
                   <div>
                     <p className="font-extrabold text-stone-800 dark:text-stone-200 text-sm flex items-center gap-2">
-                      💳 Metode Lain
+                      <CreditCard className="w-4 h-4 text-stone-600 dark:text-stone-400 shrink-0" />
+                      <span>Metode Lain</span>
                     </p>
                     <p className="text-stone-400 text-[11px] font-semibold">{reportData.paymentBreakdown.other.count} Transaksi</p>
                   </div>
@@ -463,7 +508,10 @@ export const ReportsPage: React.FC = () => {
             <div className="space-y-2.5 text-xs">
               <div className="p-3.5 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
                 <div>
-                  <p className="font-extrabold text-stone-800 dark:text-stone-200 text-sm">🪑 Dine In (Minum di Tempat)</p>
+                  <p className="font-extrabold text-stone-800 dark:text-stone-200 text-sm flex items-center gap-2">
+                    <Coffee className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Dine In (Minum di Tempat)</span>
+                  </p>
                   <p className="text-stone-400 text-[11px] font-semibold">{reportData.orderTypeBreakdown.dineIn.count} Pesanan</p>
                 </div>
                 <div className="text-right">
@@ -478,7 +526,10 @@ export const ReportsPage: React.FC = () => {
 
               <div className="p-3.5 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
                 <div>
-                  <p className="font-extrabold text-stone-800 dark:text-stone-200 text-sm">🛍️ Takeaway (Bawa Pulang)</p>
+                  <p className="font-extrabold text-stone-800 dark:text-stone-200 text-sm flex items-center gap-2">
+                    <ShoppingBag className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>Takeaway (Bawa Pulang)</span>
+                  </p>
                   <p className="text-stone-400 text-[11px] font-semibold">{reportData.orderTypeBreakdown.takeaway.count} Pesanan</p>
                 </div>
                 <div className="text-right">
@@ -763,6 +814,120 @@ export const ReportsPage: React.FC = () => {
                     <td colSpan={3}></td>
                     <td className="p-3 text-right text-emerald-600 dark:text-emerald-400 text-sm">
                       {formatRupiah(reportData.totalSales)}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* SECTION 6B: DAFTAR REFUND PERIODE INI                    */}
+      {/* ======================================================== */}
+      {(activeTab === 'all' || activeTab === 'refunds') && (
+        <div className="p-5 bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+            <div>
+              <h3 className="font-extrabold text-sm text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-rose-500" />
+                Daftar Refund Periode Ini
+              </h3>
+              <p className="text-[11px] text-stone-400 font-medium">
+                Daftar seluruh pengembalian dana yang dieksekusi selama periode laporan ({reportData.periodLabel})
+              </p>
+            </div>
+            <div className="text-right">
+              <span className="text-xs font-bold text-stone-500">Total Pengembalian: </span>
+              <span className="text-sm font-black text-rose-600 dark:text-rose-400">
+                {formatRupiah(reportData.totalRefunds)}
+              </span>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto max-h-[480px]">
+            <table className="w-full text-left text-xs min-w-[750px]">
+              <thead className="bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider sticky top-0 z-10 shadow-sm">
+                <tr>
+                  <th className="p-3">No. Nota Asal</th>
+                  <th className="p-3">Waktu Transaksi Asal</th>
+                  <th className="p-3">Waktu Refund</th>
+                  <th className="p-3">Petugas Refund</th>
+                  <th className="p-3">Metode Refund</th>
+                  <th className="p-3">Alasan Refund</th>
+                  <th className="p-3 text-right">Nominal Refund</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100 dark:divide-stone-800 font-medium">
+                {reportData.periodRefundOrders.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-stone-400 font-semibold">
+                      Tidak ada transaksi refund yang diproses pada periode ini.
+                    </td>
+                  </tr>
+                ) : (
+                  reportData.periodRefundOrders.map(o => {
+                    const method = o.refund_method;
+                    const methodLabel = method === 'cash'
+                      ? 'Tunai (Laci)'
+                      : method === 'qris'
+                      ? 'QRIS / Non-Tunai'
+                      : 'Tidak diketahui (data lama)';
+                    const methodBadgeClass = method === 'cash'
+                      ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                      : method === 'qris'
+                      ? 'bg-blue-100 dark:bg-blue-950/50 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
+                      : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-700';
+
+                    return (
+                      <tr
+                        key={o.id}
+                        onClick={() => openReceiptModal(o)}
+                        className="hover:bg-stone-50 dark:hover:bg-[#25221F] transition-colors cursor-pointer bg-rose-50/20 dark:bg-rose-950/10"
+                        title="Klik untuk melihat detail struk"
+                      >
+                        <td className="p-3 font-extrabold text-stone-900 dark:text-stone-100 text-xs">
+                          {o.order_number}
+                        </td>
+                        <td className="p-3 text-stone-600 dark:text-stone-300 font-medium">
+                          {formatDate(o.created_at)}
+                        </td>
+                        <td className="p-3 text-stone-600 dark:text-stone-300 font-medium">
+                          {o.refunded_at ? formatDate(o.refunded_at) : '-'}
+                        </td>
+                        <td className="p-3 text-stone-700 dark:text-stone-300 font-semibold">
+                          {o.refunded_by_name || 'Owner'}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${methodBadgeClass}`}>
+                            {methodLabel}
+                          </span>
+                        </td>
+                        <td className="p-3 text-stone-600 dark:text-stone-400">
+                          {o.refund_reason || '-'}
+                        </td>
+                        <td className="p-3 text-right font-black text-rose-600 dark:text-rose-400 text-xs">
+                          {formatRupiah(o.total_amount)}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+              {reportData.periodRefundOrders.length > 0 && (
+                <tfoot className="bg-stone-50 dark:bg-[#23201D] border-t-2 border-stone-200 dark:border-stone-700 font-black text-xs sticky bottom-0 z-10">
+                  <tr>
+                    <td colSpan={3} className="p-3 text-stone-800 dark:text-stone-200">
+                      <div>TOTAL REFUND PERIODE ({reportData.refundCount} TRANSAKSI)</div>
+                      <div className="text-[10px] text-stone-400 font-medium normal-case mt-0.5">
+                        Tunai: {formatRupiah(reportData.cashRefunds)} • Non-Tunai: {formatRupiah(reportData.qrisRefunds)}
+                        {reportData.unknownRefunds > 0 ? ` • Data Lama: ${formatRupiah(reportData.unknownRefunds)}` : ''}
+                      </div>
+                    </td>
+                    <td colSpan={3}></td>
+                    <td className="p-3 text-right text-rose-600 dark:text-rose-400 text-sm">
+                      {formatRupiah(reportData.totalRefunds)}
                     </td>
                   </tr>
                 </tfoot>

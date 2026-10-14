@@ -45,17 +45,30 @@ export const userRepository = {
 
   async loginByPin(pin: string): Promise<{ user: User; token: string }> {
     const cleanPin = pin.trim();
+    if (!/^\d{4}$/.test(cleanPin)) {
+      throw new Error('PIN tidak valid. Masukkan 4 digit angka numerik.');
+    }
     const users = mockStore.getUsers();
 
-    const user = users.find(u => u.pin === cleanPin && u.is_active);
+    const matchingUsers = users.filter(u => u.pin && u.pin.trim() === cleanPin && u.is_active);
 
-    if (!user) {
+    if (matchingUsers.length === 0) {
       throw new Error('PIN tidak valid atau pengguna tidak aktif');
     }
 
+    if (matchingUsers.length > 1) {
+      const names = matchingUsers.map(u => u.name).join(', ');
+      throw new Error(
+        `Konflik autentikasi: PIN ambigu karena digunakan oleh lebih dari satu pengguna (${names}). Autentikasi ditolak sampai konflik diselesaikan.`
+      );
+    }
+
+    const user = matchingUsers[0];
+    const ticket = mockStore.issuePinVerificationTicket(user.id);
+
     return {
       user,
-      token: `mock_pin_token_${user.id}`,
+      token: ticket.ticketId,
     };
   },
 

@@ -384,11 +384,12 @@ export const ProductsPage: React.FC = () => {
                     Harga Jual (Rp) <span className="text-rose-500">*</span>
                   </label>
                   <NumberInput
-                    type="number"
+                    isCurrency={true}
                     required
                     min={0}
                     value={formData.price}
                     onChange={val => setFormData({ ...formData, price: val })}
+                    placeholder="Rp 0"
                     className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold focus:outline-none"
                   />
                   {formErrors.price && (
@@ -403,10 +404,11 @@ export const ProductsPage: React.FC = () => {
                     Modal / HPP (Rp)
                   </label>
                   <NumberInput
-                    type="number"
+                    isCurrency={true}
                     min={0}
                     value={formData.cost_price}
                     onChange={val => setFormData({ ...formData, cost_price: val })}
+                    placeholder="Rp 0"
                     className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-semibold focus:outline-none"
                   />
                 </div>

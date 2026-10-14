@@ -2,6 +2,8 @@ import { useState, useCallback } from 'react';
 import { Stock, StockHistory, User } from '../../types';
 import { stockService } from '../../services/stockService';
 import { ToastType } from './usePOSToast';
+import { mockStore } from '../../mock/store';
+import { saveSecondaryCache, getSecondaryCache } from '../../mock/persistence/storage';
 
 export interface UsePOSStockProps {
   currentUser: User | null;
@@ -10,12 +12,7 @@ export interface UsePOSStockProps {
 
 export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
   const [stocks, setStocks] = useState<Stock[]>(() => {
-    try {
-      const cached = localStorage.getItem('boothdaily_cached_stocks');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
+    return getSecondaryCache<Stock[]>('boothdaily_cached_stocks') ?? [];
   });
 
   const [stockHistories, setStockHistories] = useState<StockHistory[]>([]);
@@ -28,9 +25,9 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
       ]);
       setStocks(updatedStocks);
       setStockHistories(updatedHistories);
-      try {
-        localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(updatedStocks));
-      } catch {}
+      saveSecondaryCache('boothdaily_cached_stocks', updatedStocks, {
+        isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+      });
     } catch (err) {
       console.warn('Failed to refresh stocks and histories:', err);
     }
@@ -52,21 +49,27 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
   ) => {
     const updated = await stockService.updateStock(id, stockData, {
       notes: metadata?.notes,
-      user_name: currentUser ? currentUser.name : 'Owner',
+      user_name: currentUser ? currentUser.name : undefined,
+      role: currentUser ? currentUser.role : undefined,
     });
     const normalized: Stock = {
+      ...updated,
       id: String(updated.id),
       name: updated.name,
       current_amount: Number(updated.current_amount),
       min_amount: Number(updated.min_amount || 0),
       unit: updated.unit,
       cost_per_unit: Number(updated.cost_per_unit || 0),
+      baseline_cost_per_unit: updated.baseline_cost_per_unit !== undefined ? Number(updated.baseline_cost_per_unit) : undefined,
+      baseline_source: updated.baseline_source,
+      baseline_updated_at: updated.baseline_updated_at,
+      baseline_updated_by: updated.baseline_updated_by,
     };
     setStocks(prev => {
       const next = prev.map(s => String(s.id) === String(id) ? normalized : s);
-      try {
-        localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(next));
-      } catch {}
+      saveSecondaryCache('boothdaily_cached_stocks', next, {
+        isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+      });
       return next;
     });
     try {
@@ -85,9 +88,9 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
     if (success) {
       setStocks(prev => {
         const next = prev.filter(s => String(s.id) !== String(id));
-        try {
-          localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(next));
-        } catch {}
+        saveSecondaryCache('boothdaily_cached_stocks', next, {
+          isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+        });
         return next;
       });
       showToast(`Bahan "${stk?.name || ''}" berhasil dihapus`, 'success');
@@ -104,18 +107,23 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
     const userName = currentUser ? currentUser.name : 'Owner';
     const updated = await stockService.adjustStock(stockId, changeAmount, reason, userName, notes);
     const normalized: Stock = {
+      ...updated,
       id: String(updated.id),
       name: updated.name,
       current_amount: Number(updated.current_amount),
       min_amount: Number(updated.min_amount || 0),
       unit: updated.unit,
       cost_per_unit: Number(updated.cost_per_unit || 0),
+      baseline_cost_per_unit: updated.baseline_cost_per_unit !== undefined ? Number(updated.baseline_cost_per_unit) : undefined,
+      baseline_source: updated.baseline_source,
+      baseline_updated_at: updated.baseline_updated_at,
+      baseline_updated_by: updated.baseline_updated_by,
     };
     setStocks(prev => {
       const next = prev.map(s => String(s.id) === String(stockId) ? normalized : s);
-      try {
-        localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(next));
-      } catch {}
+      saveSecondaryCache('boothdaily_cached_stocks', next, {
+        isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+      });
       return next;
     });
     try {
@@ -133,12 +141,17 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
     if (!payload?.stock?.id) return;
     const stockId = String(payload.stock.id);
     const normalizedStock: Stock = {
+      ...payload.stock,
       id: stockId,
       name: payload.stock.name,
       current_amount: Number(payload.stock.current_amount),
       min_amount: Number(payload.stock.min_amount || 0),
       unit: payload.stock.unit,
       cost_per_unit: Number(payload.stock.cost_per_unit || 0),
+      baseline_cost_per_unit: payload.stock.baseline_cost_per_unit !== undefined ? Number(payload.stock.baseline_cost_per_unit) : undefined,
+      baseline_source: payload.stock.baseline_source,
+      baseline_updated_at: payload.stock.baseline_updated_at,
+      baseline_updated_by: payload.stock.baseline_updated_by,
     };
 
     if (payload.action === 'created') {
@@ -147,13 +160,17 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
         const next = exists
           ? prev.map(s => String(s.id) === stockId ? normalizedStock : s)
           : [normalizedStock, ...prev];
-        try { localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(next)); } catch {}
+        saveSecondaryCache('boothdaily_cached_stocks', next, {
+          isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+        });
         return next;
       });
     } else if (payload.action === 'deleted') {
       setStocks(prev => {
         const next = prev.filter(s => String(s.id) !== stockId);
-        try { localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(next)); } catch {}
+        saveSecondaryCache('boothdaily_cached_stocks', next, {
+          isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+        });
         return next;
       });
     } else {
@@ -163,7 +180,9 @@ export const usePOSStock = ({ currentUser, showToast }: UsePOSStockProps) => {
         const next = exists
           ? prev.map(s => String(s.id) === stockId ? { ...s, ...normalizedStock, cost_per_unit: s.cost_per_unit ?? 0 } : s)
           : [...prev, normalizedStock];
-        try { localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(next)); } catch {}
+        saveSecondaryCache('boothdaily_cached_stocks', next, {
+          isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+        });
         return next;
       });
     }

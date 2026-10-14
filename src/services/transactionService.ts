@@ -1,6 +1,7 @@
 import { orderService } from './orderService';
 import { settingsService } from './settingsService';
 import { discountService } from './discountService';
+import { shiftService } from './shiftService';
 import { Order, PaymentMethod, OrderType, OrderItem, User } from '../types';
 import { calculateOrderPreview } from '../utils/orderCalculation';
 
@@ -17,16 +18,22 @@ export interface CreateTransactionPayload {
 export const transactionService = {
   /**
    * Orchestrates the complete checkout transaction:
-   * 1. Validates cart content.
+   * 1. Validates cart content and active cashier shift.
    * 2. Retrieves store settings and active promo discount rules.
    * 3. Calculates pure financial figures (subtotal, discount, tax, total).
    * 4. Validates payment requirements (sufficient cash or QRIS).
-   * 5. Assembles complete snapshot Order entity.
+   * 5. Assembles complete snapshot Order entity bound to active shift.
    * 6. Dispatches order creation and atomic stock deduction via orderService.
    */
   async processTransaction(payload: CreateTransactionPayload): Promise<Order> {
     if (!payload.items || payload.items.length === 0) {
       throw new Error('Keranjang belanja masih kosong');
+    }
+
+    // 0. Ensure active cashier shift exists
+    const activeShift = await shiftService.getActiveShift();
+    if (!activeShift || activeShift.status !== 'open') {
+      throw new Error('Shift kasir belum dibuka. Buka shift kasir terlebih dahulu untuk memproses transaksi.');
     }
 
     // 1. Fetch current settings and discount rules
@@ -72,6 +79,9 @@ export const transactionService = {
       qty: Number(item.qty) || 1,
       notes: item.notes || '',
       subtotal: (Number(item.price) || 0) * (Number(item.qty) || 1),
+      unit_cost_price: item.unit_cost_price,
+      subtotal_cost: item.subtotal_cost,
+      is_estimated_cost: item.is_estimated_cost,
     }));
 
     // 5. Construct order entity payload
@@ -97,6 +107,8 @@ export const transactionService = {
         status: 'completed' as const,
       },
       items: snapshotItems,
+      shift_id: activeShift.id,
+      operational_date: activeShift.operational_date,
       created_at: new Date().toISOString(),
     };
 

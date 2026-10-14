@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { usePOS } from '../../hooks/usePOS';
 import { formatRupiah } from '../../utils/formatters';
 import { calculateOrderPreview } from '../../utils/orderCalculation';
-import { ShoppingBag, Trash2, Plus, Minus, Edit3, ArrowRight, User, Utensils, ShoppingBag as BagIcon, Check, X } from 'lucide-react';
+import { ShoppingBag, Trash2, Plus, Minus, Edit3, ArrowRight, User, Utensils, ShoppingBag as BagIcon, Check, X, Lock, DoorOpen } from 'lucide-react';
 
 interface CartSidebarProps {
   onClose?: () => void;
@@ -21,6 +21,8 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
     openPinModal,
     settings,
     discountRules,
+    isShiftActive,
+    openOpenShiftModal,
   } = usePOS();
 
   const [activeEditingNoteId, setActiveEditingNoteId] = useState<string | null>(null);
@@ -304,19 +306,42 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
           </div>
         </div>
 
-        <button
-          type="button"
-          disabled={cart.length === 0}
-          onClick={openPinModal}
-          className={`w-full py-3.5 px-4 rounded-2xl font-black text-xs sm:text-sm text-[#F7F5F2] flex items-center justify-center gap-2 shadow-xl transition-all ${
-            cart.length > 0
-              ? 'bg-[#3B2A1F] hover:bg-[#2A1E16] active:scale-98 cursor-pointer'
-              : 'bg-stone-300 dark:bg-stone-800 text-stone-500 cursor-not-allowed shadow-none'
-          }`}
-        >
-          <span className="truncate">BAYAR SEKARANG ({formatRupiah(totalAmount)})</span>
-          <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-[#D4A373] shrink-0" />
-        </button>
+        {!isShiftActive && (
+          <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-2xl space-y-1 text-center">
+            <p className="text-xs font-bold text-amber-900 dark:text-amber-200 flex items-center justify-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-amber-600" />
+              Shift Kasir Belum Dibuka
+            </p>
+            <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+              Buka shift terlebih dahulu untuk memproses pesanan dan checkout transaksi.
+            </p>
+          </div>
+        )}
+
+        {!isShiftActive ? (
+          <button
+            type="button"
+            onClick={openOpenShiftModal}
+            className="w-full py-3.5 px-4 rounded-2xl font-black text-xs sm:text-sm text-[#F7F5F2] bg-[#3B2A1F] hover:bg-[#2A1E16] active:scale-98 cursor-pointer flex items-center justify-center gap-2 shadow-xl transition-all"
+          >
+            <DoorOpen className="w-4 h-4 text-[#D4A373] shrink-0" />
+            <span>BUKA SHIFT UNTUK TRANSAKSI</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={cart.length === 0}
+            onClick={openPinModal}
+            className={`w-full py-3.5 px-4 rounded-2xl font-black text-xs sm:text-sm text-[#F7F5F2] flex items-center justify-center gap-2 shadow-xl transition-all ${
+              cart.length > 0
+                ? 'bg-[#3B2A1F] hover:bg-[#2A1E16] active:scale-98 cursor-pointer'
+                : 'bg-stone-300 dark:bg-stone-800 text-stone-500 cursor-not-allowed shadow-none'
+            }`}
+          >
+            <span className="truncate">BAYAR SEKARANG ({formatRupiah(totalAmount)})</span>
+            <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-[#D4A373] shrink-0" />
+          </button>
+        )}
       </div>
     </div>
   );

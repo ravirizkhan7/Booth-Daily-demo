@@ -2,81 +2,423 @@ import { MockStoreState } from '../types';
 
 export const DEMO_STORAGE_KEY = 'boothdaily_demo_store';
 
-const isLocalStorageAvailable = (): boolean => {
-  try {
-    return (
-      typeof window !== 'undefined' &&
-      typeof window.localStorage !== 'undefined' &&
-      window.localStorage !== null
-    );
-  } catch {
-    return false;
+export type StorageLoadStatus =
+  | 'FRESH_INSTALL'
+  | 'SUCCESS'
+  | 'CORRUPTED_JSON'
+  | 'SCHEMA_INVALID'
+  | 'STORAGE_UNAVAILABLE';
+
+export interface StorageLoadResult {
+  status: StorageLoadStatus;
+  data: MockStoreState | null;
+  raw?: string | null;
+  error?: string;
+  missingFields?: string[];
+  quarantineKey?: string | null;
+}
+
+export type StorageSaveErrorCode =
+  | 'STORAGE_UNAVAILABLE'
+  | 'WRITE_LOCKED'
+  | 'QUOTA_EXCEEDED'
+  | 'SERIALIZATION_FAILED'
+  | 'WRITE_FAILED';
+
+export interface StorageSaveResult {
+  success: boolean;
+  errorCode?: StorageSaveErrorCode;
+  error?: string;
+}
+
+export interface StorageDriver {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+  getAllKeys?(): string[];
+  key?(index: number): string | null;
+  length?: number;
+}
+
+export class NodeMemoryStorageDriver implements StorageDriver {
+  private data = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.data.has(key) ? this.data.get(key)! : null;
   }
+
+  setItem(key: string, value: string): void {
+    this.data.set(key, String(value));
+  }
+
+  removeItem(key: string): void {
+    this.data.delete(key);
+  }
+
+  getAllKeys(): string[] {
+    return Array.from(this.data.keys());
+  }
+
+  get length(): number {
+    return this.data.size;
+  }
+
+  key(index: number): string | null {
+    const keys = Array.from(this.data.keys());
+    return keys[index] ?? null;
+  }
+
+  clear(): void {
+    this.data.clear();
+  }
+}
+
+const nodeDefaultDriver = new NodeMemoryStorageDriver();
+let customStorageDriver: StorageDriver | null | undefined = undefined;
+
+/**
+ * Memasang driver storage khusus (digunakan untuk pengujian terisolasi
+ * tanpa menyentuh window.localStorage riil pengguna).
+ * Mengirimkan null mensimulasikan kondisi storage tidak tersedia.
+ */
+export function setStorageDriver(driver: StorageDriver | null | undefined): void {
+  customStorageDriver = driver;
+}
+
+export function resetStorageDriver(): void {
+  customStorageDriver = undefined;
+}
+
+export function getActiveStorage(): StorageDriver | null {
+  // Jika driver khusus dipasang secara eksplisit (termasuk null untuk simulasi kegagalan)
+  if (customStorageDriver !== undefined) {
+    return customStorageDriver;
+  }
+
+  // Lingkungan browser nyata
+  if (typeof window !== 'undefined') {
+    try {
+      if (typeof window.localStorage !== 'undefined' && window.localStorage !== null) {
+        return window.localStorage;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  // Lingkungan headless Node.js (CLI validator)
+  return nodeDefaultDriver;
+}
+
+export const isLocalStorageAvailable = (): boolean => {
+  return getActiveStorage() !== null;
 };
 
 /**
- * Load persisted state snapshot from localStorage.
- * Returns null if not found, unavailable, or corrupted.
+ * Mengambil seluruh keys dari storage driver secara aman
  */
-export function loadPersistedSnapshot(): MockStoreState | null {
-  if (!isLocalStorageAvailable()) {
-    return null;
+export function getStorageKeys(storage: StorageDriver): string[] {
+  if (typeof storage.getAllKeys === 'function') {
+    try {
+      return storage.getAllKeys();
+    } catch {}
   }
-
+  if (typeof (storage as any).store === 'object' && (storage as any).store !== null) {
+    return Object.keys((storage as any).store);
+  }
+  if (typeof storage.length === 'number' && typeof storage.key === 'function') {
+    const keys: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const k = storage.key(i);
+      if (k) keys.push(k);
+    }
+    return keys;
+  }
   try {
-    const raw = window.localStorage.getItem(DEMO_STORAGE_KEY);
-    if (!raw) return null;
+    return Object.keys(storage);
+  } catch {
+    return [];
+  }
+}
 
-    const parsed = JSON.parse(raw);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      Array.isArray(parsed.users) &&
-      Array.isArray(parsed.categories) &&
-      Array.isArray(parsed.products) &&
-      Array.isArray(parsed.stocks) &&
-      Array.isArray(parsed.recipes) &&
-      Array.isArray(parsed.orders) &&
-      Array.isArray(parsed.purchases) &&
-      Array.isArray(parsed.discountRules) &&
-      parsed.settings
-    ) {
-      return parsed as MockStoreState;
+/**
+ * Menyimpan salinan data mentah rusak ke karantina dengan deduplikasi aman:
+ * - Cek apakah sudah ada key karantina yang isinya identik dengan raw.
+ * - Jika sudah ada, gunakan kembali key tersebut tanpa melakukan penulisan baru (hemat kuota & cegah duplikasi).
+ * - Jika belum ada, buat key baru unik berbasis timestamp dan verifikasi hasil tulis.
+ * - Jika penyimpanan penuh atau penulisan/verifikasi gagal, jangan modifikasi/hapus key sumber.
+ */
+function quarantineRawData(storage: StorageDriver, raw: string): string | null {
+  try {
+    const existingKeys = getStorageKeys(storage).filter(k =>
+      k.startsWith(`${DEMO_STORAGE_KEY}_quarantine_`)
+    );
+
+    // 1. Cek deduplikasi: jika ada salinan karantina yang isinya sama persis, gunakan kembali
+    for (const key of existingKeys) {
+      try {
+        const existingContent = storage.getItem(key);
+        if (existingContent === raw) {
+          return key;
+        }
+      } catch {}
     }
 
-    return null;
+    // 2. Buat key karantina baru yang unik tanpa menimpa key karantina lain yang sudah ada
+    const qKey = `${DEMO_STORAGE_KEY}_quarantine_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    storage.setItem(qKey, raw);
+
+    // 3. Verifikasi salinan berhasil ditulis dan isinya sama dengan data mentah sumber
+    const readBack = storage.getItem(qKey);
+    if (readBack !== raw) {
+      console.warn('[MockStorage] Verifikasi karantina gagal: isi data hasil baca tidak identik dengan sumber.');
+      try {
+        storage.removeItem(qKey);
+      } catch {}
+      return null;
+    }
+
+    return qKey;
   } catch (err) {
-    console.warn('[MockStorage] Failed to parse persisted demo store snapshot:', err);
+    console.warn('[MockStorage] Karantina otomatis gagal disimpan (storage penuh/terblokir):', err);
     return null;
   }
 }
 
 /**
- * Persist the entire mock store state snapshot into localStorage.
+ * Membaca snapshot state dari storage dengan klasifikasi diagnostik ketat:
+ * - FRESH_INSTALL: Key belum pernah dibuat sama sekali (null/kosong).
+ * - SUCCESS: Data ada, valid secara JSON dan memenuhi kontrak skema.
+ * - CORRUPTED_JSON: Key ada tetapi gagal di-parse (sintaks rusak). Dikarantina otomatis.
+ * - SCHEMA_INVALID: JSON valid tetapi struktur data cacat/field hilang. Dikarantina otomatis.
+ * - STORAGE_UNAVAILABLE: Storage tidak dapat diakses (misal mode privat terblokir atau headless).
  */
-export function savePersistedSnapshot(state: MockStoreState): void {
-  if (!isLocalStorageAvailable()) {
-    return;
+export function loadPersistedSnapshot(): StorageLoadResult {
+  const storage = getActiveStorage();
+  if (!storage) {
+    return {
+      status: 'STORAGE_UNAVAILABLE',
+      data: null,
+      error: 'Penyimpanan browser tidak tersedia atau dinonaktifkan.',
+    };
+  }
+
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(DEMO_STORAGE_KEY);
+  } catch (err: any) {
+    return {
+      status: 'STORAGE_UNAVAILABLE',
+      data: null,
+      error: err?.message || 'Gagal membaca dari penyimpanan.',
+    };
+  }
+
+  // Kondisi 1: Penyimpanan benar-benar belum pernah dibuat (Fresh Install)
+  if (raw === null || raw.trim() === '') {
+    return {
+      status: 'FRESH_INSTALL',
+      data: null,
+    };
+  }
+
+  // Kondisi 2 & 3: Coba parse JSON
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err: any) {
+    const errorMsg = err?.message || 'Format JSON tidak valid atau terpotong.';
+    console.warn('[MockStorage] Gagal mengurai snapshot JSON:', errorMsg);
+
+    // Karantina data mentah ke key darurat agar data pengguna tidak musnah
+    const quarantineKey = quarantineRawData(storage, raw);
+
+    return {
+      status: 'CORRUPTED_JSON',
+      data: null,
+      raw,
+      error: errorMsg,
+      quarantineKey,
+    };
+  }
+
+  // Kondisi 4: Validasi kontrak skema secara eksplisit
+  const missingFields: string[] = [];
+  if (!parsed || typeof parsed !== 'object') {
+    missingFields.push('root_object');
+  } else {
+    const requiredArrayFields: (keyof MockStoreState)[] = [
+      'users',
+      'categories',
+      'products',
+      'stocks',
+      'stockHistories',
+      'recipes',
+      'orders',
+      'purchases',
+      'discountRules',
+      'shifts',
+    ];
+
+    for (const field of requiredArrayFields) {
+      if (!Array.isArray(parsed[field])) {
+        missingFields.push(field);
+      }
+    }
+
+    if (!parsed.settings || typeof parsed.settings !== 'object') {
+      missingFields.push('settings');
+    }
+  }
+
+  if (missingFields.length > 0) {
+    console.warn('[MockStorage] Struktur snapshot tidak memenuhi kontrak skema:', missingFields);
+
+    const quarantineKey = quarantineRawData(storage, raw);
+
+    return {
+      status: 'SCHEMA_INVALID',
+      data: null,
+      raw,
+      missingFields,
+      error: `Kontrak skema tidak valid. Field berikut hilang atau bukan array: ${missingFields.join(', ')}`,
+      quarantineKey,
+    };
+  }
+
+  if (typeof parsed.activeShiftId === 'undefined') {
+    parsed.activeShiftId = null;
+  }
+
+  return {
+    status: 'SUCCESS',
+    data: parsed as MockStoreState,
+  };
+}
+
+/**
+ * Menyimpan snapshot state ke storage.
+ * Menangani proteksi write-lock, QuotaExceededError, dan kegagalan serialisasi secara eksplisit.
+ */
+export function savePersistedSnapshot(
+  state: MockStoreState,
+  options?: { isWriteLocked?: boolean }
+): StorageSaveResult {
+  if (options?.isWriteLocked) {
+    return {
+      success: false,
+      errorCode: 'WRITE_LOCKED',
+      error: 'Penulisan diblokir: Penyimpanan sedang dalam mode proteksi tulis (data korup/terkunci).',
+    };
+  }
+
+  const storage = getActiveStorage();
+  if (!storage) {
+    return {
+      success: false,
+      errorCode: 'STORAGE_UNAVAILABLE',
+      error: 'Penyimpanan browser tidak tersedia atau dinonaktifkan.',
+    };
+  }
+
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(state);
+  } catch (err: any) {
+    console.error('[MockStorage] Serialisasi snapshot gagal:', err);
+    return {
+      success: false,
+      errorCode: 'SERIALIZATION_FAILED',
+      error: err?.message || 'Gagal melakukan serialisasi data snapshot.',
+    };
   }
 
   try {
-    window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(state));
-  } catch (err) {
-    console.error('[MockStorage] Failed to save demo store snapshot to localStorage:', err);
+    storage.setItem(DEMO_STORAGE_KEY, serialized);
+    return { success: true };
+  } catch (err: any) {
+    console.error('[MockStorage] Gagal menyimpan snapshot ke storage:', err);
+    const isQuota =
+      err?.name === 'QuotaExceededError' ||
+      err?.code === 22 ||
+      err?.code === 1014 ||
+      (typeof err?.message === 'string' &&
+        err.message.toLowerCase().includes('quota'));
+
+    return {
+      success: false,
+      errorCode: isQuota ? 'QUOTA_EXCEEDED' : 'WRITE_FAILED',
+      error: err?.message || 'Gagal menyimpan snapshot ke storage.',
+    };
   }
 }
 
 /**
- * Clear the persisted demo store snapshot from localStorage.
+ * Menghapus snapshot utama dari storage (misal saat reset eksplisit).
  */
-export function clearPersistedSnapshot(): void {
-  if (!isLocalStorageAvailable()) {
-    return;
+export function clearPersistedSnapshot(): StorageSaveResult {
+  const storage = getActiveStorage();
+  if (!storage) {
+    return {
+      success: false,
+      errorCode: 'STORAGE_UNAVAILABLE',
+      error: 'Penyimpanan browser tidak tersedia.',
+    };
   }
 
   try {
-    window.localStorage.removeItem(DEMO_STORAGE_KEY);
-  } catch (err) {
-    console.error('[MockStorage] Failed to clear demo store snapshot from localStorage:', err);
+    storage.removeItem(DEMO_STORAGE_KEY);
+    return { success: true };
+  } catch (err: any) {
+    console.error('[MockStorage] Gagal menghapus snapshot dari storage:', err);
+    return {
+      success: false,
+      errorCode: 'WRITE_FAILED',
+      error: err?.message || 'Gagal menghapus snapshot.',
+    };
   }
 }
+
+/**
+ * Menyimpan data ke cache sekunder secara aman:
+ * - Tidak boleh menulis saat sistem dalam mode proteksi write-lock.
+ * - Tidak boleh menulis saat storage unavailable.
+ * - Kegagalan cache ditangani secara diam tanpa merusak transaksi atau melempar error unhandled.
+ * - Tidak menyentuh key transaksi utama (DEMO_STORAGE_KEY).
+ */
+export function saveSecondaryCache(
+  key: string,
+  data: any,
+  options?: { isWriteLocked?: boolean }
+): void {
+  if (options?.isWriteLocked) {
+    return;
+  }
+  const storage = getActiveStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.setItem(key, JSON.stringify(data));
+  } catch (err) {
+    console.warn(`[MockStorage] Gagal menyimpan cache sekunder (${key}):`, err);
+  }
+}
+
+/**
+ * Membaca data dari cache sekunder secara aman
+ */
+export function getSecondaryCache<T>(key: string): T | null {
+  const storage = getActiveStorage();
+  if (!storage) {
+    return null;
+  }
+  try {
+    const raw = storage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+

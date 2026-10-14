@@ -25,7 +25,7 @@ export const stockService = {
   async updateStock(
     id: string,
     stockData: Partial<Stock>,
-    metadata?: { notes?: string; user_name?: string }
+    metadata?: { notes?: string; user_name?: string; role?: string }
   ): Promise<Stock> {
     return stockRepository.updateStock(id, stockData, metadata);
   },

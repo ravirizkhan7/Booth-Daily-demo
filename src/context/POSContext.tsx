@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useEffect, useCallback, useRef, ReactNode } from 'react';
-import { Product, Category, Recipe, Order, Stock, Purchase, User, OrderType, PaymentMethod, Settings, StockHistory, DiscountRule } from '../types';
+import React, { createContext, useContext, useEffect, useCallback, useRef, useState, ReactNode } from 'react';
+import { Product, Category, Recipe, Order, Stock, Purchase, User, OrderType, PaymentMethod, Settings, StockHistory, DiscountRule, Shift } from '../types';
 import { productService } from '../services/productService';
 import { recipeService } from '../services/recipeService';
 import { userService } from '../services/userService';
@@ -8,6 +8,8 @@ import { stockService } from '../services/stockService';
 import { discountService } from '../services/discountService';
 import { settingsService } from '../services/settingsService';
 import { subscribePosPublic, leavePosPublic, subscribePosBooth, leavePosBooth, onEchoConnected } from '../services/echo';
+import { mockStore, StorageStatusInfo } from '../mock/store';
+import { saveSecondaryCache } from '../mock/persistence/storage';
 
 import { usePOSToast } from './pos/usePOSToast';
 import { usePOSAuth } from './pos/usePOSAuth';
@@ -21,6 +23,7 @@ import { usePOSPayments } from './pos/usePOSPayments';
 import { usePOSSettings } from './pos/usePOSSettings';
 import { usePOSUsers } from './pos/usePOSUsers';
 import { usePOSDiscounts } from './pos/usePOSDiscounts';
+import { usePOSShift } from './pos/usePOSShift';
 
 export type { CartItem };
 
@@ -44,6 +47,22 @@ interface POSContextType {
   editDiscountRule: (id: number | string, payload: { name?: string; minimum_purchase?: number; discount_percentage?: number; is_active?: boolean }) => Promise<DiscountRule>;
   toggleDiscountRuleStatus: (id: number | string) => Promise<DiscountRule>;
   removeDiscountRule: (id: number | string) => Promise<boolean>;
+
+  // Shift & Reconciliation
+  shifts: Shift[];
+  activeShift: Shift | null;
+  isShiftActive: boolean;
+  isOpenShiftModalOpen: boolean;
+  openOpenShiftModal: () => void;
+  closeOpenShiftModal: () => void;
+  isCloseShiftModalOpen: boolean;
+  openCloseShiftModal: () => void;
+  closeCloseShiftModal: () => void;
+  openShift: (cashInitial: number, pin: string) => Promise<{ success: boolean; message: string; shift?: Shift }>;
+  closeShift: (payload: { actual_cash_end: number; actual_qris_end: number | null; actual_refund_total: number | null; cash_difference_reason?: string; qris_difference_reason?: string; notes?: string; pin: string }) => Promise<{ success: boolean; message: string; shift?: Shift }>;
+  reviewShift: (payload: { shift_id: string; action: 'approved_variance' | 'correction_requested'; notes?: string; pin: string }) => Promise<{ success: boolean; message: string; shift?: Shift }>;
+  correctShift: (payload: { shift_id: string; actual_cash_end: number; actual_qris_end: number | null; actual_refund_total?: number | null; cash_difference_reason?: string; qris_difference_reason?: string; correction_notes?: string; pin: string }) => Promise<{ success: boolean; message: string; shift?: Shift }>;
+  refreshShifts: () => Promise<void>;
 
   // POS Workspace state
   cart: CartItem[];
@@ -110,7 +129,7 @@ interface POSContextType {
   openPinModal: () => void;
   closePinModal: () => void;
   processPaymentWithPin: (pin: string, paymentMethod: PaymentMethod, amountPaid: number) => Promise<{ success: boolean; message: string; order?: Order }>;
-  refundOrder: (orderId: string, metadata?: { refunded_by_name?: string; refund_reason?: string }) => Promise<{ success: boolean; message: string; order?: Order }>;
+  refundOrder: (orderId: string, metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }) => Promise<{ success: boolean; message: string; order?: Order }>;
 
   // Receipt Modal
   currentReceiptOrder: Order | null;
@@ -125,6 +144,9 @@ interface POSContextType {
   // Toast
   toast: { message: string; type: 'success' | 'error' | 'info' } | null;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+
+  // Storage Integrity
+  storageStatusInfo?: StorageStatusInfo;
 }
 
 const POSContext = createContext<POSContextType | undefined>(undefined);
@@ -132,6 +154,55 @@ const POSContext = createContext<POSContextType | undefined>(undefined);
 export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Domain 1: Toast
   const { toast, showToast } = usePOSToast();
+
+  // Domain 0: Storage Integrity Tracking
+  const [storageStatusInfo, setStorageStatusInfo] = useState<StorageStatusInfo>(() => mockStore.getStorageStatusInfo());
+  const hasShownBootWarningRef = useRef(false);
+
+  useEffect(() => {
+    const initialInfo = mockStore.getStorageStatusInfo();
+    setStorageStatusInfo(initialInfo);
+
+    if (!hasShownBootWarningRef.current) {
+      hasShownBootWarningRef.current = true;
+      if (
+        initialInfo.isWriteLocked &&
+        (initialInfo.status === 'CORRUPTED_JSON' || initialInfo.status === 'SCHEMA_INVALID')
+      ) {
+        showToast(
+          'Peringatan: Penyimpanan data lokal terdeteksi rusak atau tidak valid. Proteksi tulis aktif agar data lama tidak tertimpa.',
+          'error'
+        );
+      } else if (initialInfo.status === 'STORAGE_UNAVAILABLE') {
+        showToast(
+          'Peringatan: Penyimpanan browser tidak tersedia atau dinonaktifkan. Data transaksi tidak akan tersimpan secara permanen.',
+          'error'
+        );
+      }
+    }
+
+    const unsubscribe = mockStore.subscribeStorageStatus((info) => {
+      setStorageStatusInfo(info);
+      if (info.lastSaveResult.errorCode === 'QUOTA_EXCEEDED') {
+        showToast(
+          'Penyimpanan browser penuh (Quota Exceeded). Perubahan tidak dapat disimpan permanen.',
+          'error'
+        );
+      } else if (info.lastSaveResult.errorCode === 'WRITE_LOCKED') {
+        showToast(
+          'Penulisan dibatalkan: Penyimpanan terkunci dalam mode darurat untuk melindungi data lama.',
+          'error'
+        );
+      } else if (info.lastSaveResult.errorCode === 'STORAGE_UNAVAILABLE') {
+        showToast(
+          'Penyimpanan browser tidak tersedia. Perubahan tidak dapat disimpan permanen.',
+          'error'
+        );
+      }
+    });
+
+    return unsubscribe;
+  }, [showToast]);
 
   // Domain 10: Settings
   const { settings, setSettings } = usePOSSettings();
@@ -254,10 +325,33 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     handlePurchaseRealtimeChange,
   } = purchasesDomain;
 
+  // Domain 13: Shift
+  const shiftDomain = usePOSShift({
+    currentUser,
+    showToast,
+  });
+  const {
+    shifts,
+    activeShift,
+    isShiftActive,
+    isOpenShiftModalOpen,
+    openOpenShiftModal,
+    closeOpenShiftModal,
+    isCloseShiftModalOpen,
+    openCloseShiftModal,
+    closeCloseShiftModal,
+    openShift,
+    closeShift,
+    reviewShift,
+    correctShift,
+    refreshShifts,
+  } = shiftDomain;
+
   // Domain 7: Cart
   const cartDomain = usePOSCart({
     recipes,
     stocks,
+    isShiftActive,
     showToast,
   });
   const {
@@ -296,6 +390,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     clearCart,
     onOrderCreated: (newOrder) => {
       setOrders(prev => [newOrder, ...prev]);
+      refreshShifts();
     },
     onStockChange: refreshStocksAndHistories,
     showToast,
@@ -329,9 +424,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (prds.status === 'fulfilled') {
         setProducts(prds.value);
         hasSuccesses = true;
-        try {
-          localStorage.setItem('boothdaily_cached_products', JSON.stringify(prds.value));
-        } catch {}
+        saveSecondaryCache('boothdaily_cached_products', prds.value, {
+          isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+        });
       } else {
         hasFailures = true;
         console.warn('GET /products failed:', prds.reason);
@@ -340,9 +435,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (cats.status === 'fulfilled') {
         setCategories(cats.value);
         hasSuccesses = true;
-        try {
-          localStorage.setItem('boothdaily_cached_categories', JSON.stringify(cats.value));
-        } catch {}
+        saveSecondaryCache('boothdaily_cached_categories', cats.value, {
+          isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+        });
       } else {
         hasFailures = true;
         console.warn('GET /categories failed:', cats.reason);
@@ -359,9 +454,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (stks.status === 'fulfilled') {
         setStocks(stks.value);
         hasSuccesses = true;
-        try {
-          localStorage.setItem('boothdaily_cached_stocks', JSON.stringify(stks.value));
-        } catch {}
+        saveSecondaryCache('boothdaily_cached_stocks', stks.value, {
+          isWriteLocked: mockStore.getStorageStatusInfo().isWriteLocked,
+        });
       } else {
         hasFailures = true;
         console.warn('GET /stocks failed:', stks.reason);
@@ -485,6 +580,10 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setUsersList([]);
       }
 
+      try {
+        await refreshShifts();
+      } catch {}
+
       return hasSuccesses && !hasFailures;
     } catch (error) {
       console.error('refreshData unexpected error:', error);
@@ -505,6 +604,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setPurchases,
     setUsersList,
     setAuthReady,
+    refreshShifts,
   ]);
 
   // Keep refreshDataRef up to date for onAuthSuccess callback
@@ -816,8 +916,23 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         toggleFavorite,
         refundOrder,
         refreshData,
+        shifts,
+        activeShift,
+        isShiftActive,
+        isOpenShiftModalOpen,
+        openOpenShiftModal,
+        closeOpenShiftModal,
+        isCloseShiftModalOpen,
+        openCloseShiftModal,
+        closeCloseShiftModal,
+        openShift,
+        closeShift,
+        reviewShift,
+        correctShift,
+        refreshShifts,
         toast,
         showToast,
+        storageStatusInfo,
       }}
     >
       {children}

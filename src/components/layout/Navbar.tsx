@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { User, Edit3, Lock, LogIn, LogOut, Menu, X, ChevronDown, Sparkles } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { User, Edit3, Lock, LogIn, LogOut, Menu, X, ChevronDown, Sparkles, DoorOpen, Clock, ShieldAlert } from 'lucide-react';
 import { usePOS } from '../../hooks/usePOS';
 import { BrandLogo } from '../common/BrandLogo';
 
@@ -9,7 +10,19 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ isMobileMenuOpen, setIsMobileMenuOpen }) => {
-  const { currentUser, openLoginModal, openEditAccountModal, openLogoutModal, showToast } = usePOS();
+  const navigate = useNavigate();
+  const {
+    currentUser,
+    openLoginModal,
+    openEditAccountModal,
+    openLogoutModal,
+    showToast,
+    isShiftActive,
+    activeShift,
+    openOpenShiftModal,
+    openCloseShiftModal,
+    shifts,
+  } = usePOS();
   const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -39,7 +52,47 @@ export const Navbar: React.FC<NavbarProps> = ({ isMobileMenuOpen, setIsMobileMen
         <BrandLogo size="sm" />
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
+        {/* Shift Status Indicator & Action */}
+        {isShiftActive && activeShift ? (
+          <button
+            type="button"
+            onClick={openCloseShiftModal}
+            title={`Shift #${activeShift.shift_number} aktif (${activeShift.opened_by_name}). Klik untuk tutup shift.`}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-[10px] font-extrabold uppercase tracking-wider transition-all cursor-pointer"
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span className="hidden sm:inline">Shift #{activeShift.shift_number} Aktif</span>
+            <span className="sm:hidden">Shift Aktif</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={openOpenShiftModal}
+            title="Shift belum dibuka. Klik untuk buka shift."
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-[10px] font-extrabold uppercase tracking-wider transition-all cursor-pointer"
+          >
+            <DoorOpen className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+            <span>Buka Shift</span>
+          </button>
+        )}
+
+        {/* Koreksi Shift Indicator */}
+        {shifts.some(s => s.status === 'closed' && s.reconciliation_status === 'correction_requested') && (
+          <button
+            type="button"
+            onClick={() => navigate('/shifts')}
+            title="Terdapat shift yang perlu dikoreksi. Klik untuk buka halaman shift."
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-[10px] font-extrabold uppercase tracking-wider transition-all cursor-pointer animate-pulse"
+          >
+            <ShieldAlert className="w-3 h-3 text-rose-600 dark:text-rose-400" />
+            <span className="hidden sm:inline">Perlu Koreksi</span>
+          </button>
+        )}
+
         {/* Demo Indicator Badge */}
         <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-800 dark:text-amber-300 text-[10px] font-extrabold uppercase tracking-wider">
           <Sparkles className="w-3 h-3 text-amber-600 dark:text-amber-400" />

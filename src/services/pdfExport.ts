@@ -121,19 +121,25 @@ export const exportReportToPDF = ({
   // 3. SECTION: ARUS KAS OPERASIONAL & BREAKDOWN
   autoTable(doc, {
     startY: currentY,
-    head: [['ARUS KAS OPERASIONAL', 'NOMINAL (RP)', 'METODE PEMBAYARAN', 'TOTAL OMZET']],
+    head: [['ARUS KAS OPERASIONAL', 'NOMINAL (RP)', 'RINCIAN / METODE', 'TOTAL / DETAIL']],
     body: [
       [
         'Uang Masuk (Penjualan)',
         formatRupiah(reportData.cashIn),
-        `Tunai (Cash) - ${reportData.paymentBreakdown.cash.count} Trx`,
-        `${formatRupiah(reportData.paymentBreakdown.cash.total)} (${reportData.paymentBreakdown.cash.percentage}%)`
+        `Tunai: ${formatRupiah(reportData.paymentBreakdown.cash.total)}`,
+        `QRIS: ${formatRupiah(reportData.paymentBreakdown.qris.total)}`
       ],
       [
-        'Uang Keluar (Pembelian Restok)',
+        'Uang Keluar (Belanja & Refund)',
         formatRupiah(reportData.cashOut),
-        `QRIS / E-Wallet - ${reportData.paymentBreakdown.qris.count} Trx`,
-        `${formatRupiah(reportData.paymentBreakdown.qris.total)} (${reportData.paymentBreakdown.qris.percentage}%)`
+        `Belanja: ${formatRupiah(reportData.totalPurchases)}`,
+        `Total Refund: ${formatRupiah(reportData.totalRefunds)}`
+      ],
+      [
+        '  • Rincian Pengembalian Dana',
+        formatRupiah(reportData.totalRefunds),
+        `Tunai: ${formatRupiah(reportData.cashRefunds)}`,
+        `Non-Tunai: ${formatRupiah(reportData.qrisRefunds)}${reportData.unknownRefunds > 0 ? ` | Lama: ${formatRupiah(reportData.unknownRefunds)}` : ''}`
       ],
       [
         'SELISIH ARUS KAS PERIODE',
@@ -167,7 +173,7 @@ export const exportReportToPDF = ({
   doc.setFont('helvetica', 'italic');
   doc.setTextColor(120, 120, 120);
   doc.text(
-    '* Selisih Arus Kas menunjukkan perbedaan uang masuk dari penjualan dan uang keluar pembelian bahan, bukan laba bersih.',
+    '* Arus Kas Operasional merupakan gabungan operasional tunai dan non-tunai (bank/QRIS), bukan saldo fisik laci kasir.',
     14,
     currentY + 2
   );
@@ -337,6 +343,70 @@ export const exportReportToPDF = ({
     },
     alternateRowStyles: {
       fillColor: tableAltColor
+    },
+    margin: { left: 14, right: 14 }
+  });
+
+  currentY = (doc as any).lastAutoTable.finalY + 6;
+
+  // 7. SECTION: DAFTAR PENGEMBALIAN DANA (REFUND) PERIODE INI
+  const refundTableRows = reportData.periodRefundOrders.map(o => {
+    const methodStr = o.refund_method === 'cash'
+      ? 'Tunai'
+      : o.refund_method === 'qris'
+      ? 'QRIS'
+      : 'Tidak Diketahui';
+    return [
+      o.order_number,
+      formatDate(o.created_at),
+      o.refunded_at ? formatDate(o.refunded_at) : '-',
+      o.refunded_by_name || 'Owner',
+      methodStr,
+      o.refund_reason || '-',
+      formatRupiah(o.total_amount)
+    ];
+  });
+
+  if (refundTableRows.length === 0) {
+    refundTableRows.push(['-', '-', '-', '-', '-', 'Tidak ada transaksi refund pada periode ini', 'Rp 0']);
+  }
+
+  autoTable(doc, {
+    startY: currentY,
+    head: [['NO. NOTA ASAL', 'WAKTU ASAL', 'WAKTU REFUND', 'PETUGAS', 'METODE', 'ALASAN', 'NOMINAL REFUND']],
+    body: refundTableRows,
+    foot: [
+      [
+        'TOTAL REFUND PERIODE',
+        '',
+        '',
+        '',
+        '',
+        `${reportData.refundCount} Transaksi`,
+        formatRupiah(reportData.totalRefunds)
+      ]
+    ],
+    theme: 'grid',
+    headStyles: {
+      fillColor: [160, 45, 65],
+      textColor: 255,
+      fontSize: 8,
+      fontStyle: 'bold'
+    },
+    footStyles: {
+      fillColor: [252, 235, 238],
+      textColor: [160, 45, 65],
+      fontSize: 8,
+      fontStyle: 'bold'
+    },
+    bodyStyles: {
+      fontSize: 7,
+      cellPadding: 1.8
+    },
+    columnStyles: {
+      0: { fontStyle: 'bold' },
+      4: { halign: 'center', fontStyle: 'bold' },
+      6: { halign: 'right', fontStyle: 'bold' }
     },
     margin: { left: 14, right: 14 }
   });

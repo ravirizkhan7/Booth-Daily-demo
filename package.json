@@ -13,7 +13,12 @@
     "validate:phase2": "tsx src/mock/validation/validatePhase2.ts",
     "validate:phase3": "tsx src/mock/validation/validatePhase3.ts",
     "validate:phase4": "tsx src/mock/validation/validatePhase4.ts",
-    "validate:phase5": "tsx src/mock/validation/validatePhase5.ts"
+    "validate:phase5": "tsx src/mock/validation/validatePhase5.ts",
+    "validate:shifts": "tsx src/mock/validation/validateShiftSystem.ts",
+    "validate:recon": "tsx src/mock/validation/validateShiftReconciliationScenarios.ts",
+    "validate:integrity": "tsx src/mock/validation/validateDataIntegrity.ts",
+    "validate:formatting": "tsx src/mock/validation/validateNumberInputFormatting.ts",
+    "validate:units": "tsx src/mock/validation/validateUnitConversionAndRounding.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

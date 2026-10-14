@@ -8,6 +8,9 @@ export const initialStocks: Stock[] = [
     min_amount: 500,
     unit: 'Gram',
     cost_per_unit: 200,
+    baseline_cost_per_unit: 200,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-fresh-milk',
@@ -16,6 +19,9 @@ export const initialStocks: Stock[] = [
     min_amount: 2000,
     unit: 'ml',
     cost_per_unit: 25,
+    baseline_cost_per_unit: 25,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-oat-milk',
@@ -24,6 +30,9 @@ export const initialStocks: Stock[] = [
     min_amount: 500,
     unit: 'ml',
     cost_per_unit: 60,
+    baseline_cost_per_unit: 60,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-palm-sugar',
@@ -32,6 +41,9 @@ export const initialStocks: Stock[] = [
     min_amount: 500,
     unit: 'ml',
     cost_per_unit: 40,
+    baseline_cost_per_unit: 40,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-condensed-milk',
@@ -40,6 +52,9 @@ export const initialStocks: Stock[] = [
     min_amount: 300,
     unit: 'Gram',
     cost_per_unit: 30,
+    baseline_cost_per_unit: 30,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-matcha-powder',
@@ -48,6 +63,9 @@ export const initialStocks: Stock[] = [
     min_amount: 200,
     unit: 'Gram',
     cost_per_unit: 450,
+    baseline_cost_per_unit: 450,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-chocolate-powder',
@@ -56,6 +74,9 @@ export const initialStocks: Stock[] = [
     min_amount: 250,
     unit: 'Gram',
     cost_per_unit: 180,
+    baseline_cost_per_unit: 180,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-black-tea',
@@ -64,6 +85,9 @@ export const initialStocks: Stock[] = [
     min_amount: 200,
     unit: 'Gram',
     cost_per_unit: 90,
+    baseline_cost_per_unit: 90,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-lemon-syrup',
@@ -72,6 +96,9 @@ export const initialStocks: Stock[] = [
     min_amount: 300,
     unit: 'ml',
     cost_per_unit: 50,
+    baseline_cost_per_unit: 50,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-strawberry-syrup',
@@ -80,6 +107,9 @@ export const initialStocks: Stock[] = [
     min_amount: 250,
     unit: 'ml',
     cost_per_unit: 55,
+    baseline_cost_per_unit: 55,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-croissant-butter',
@@ -88,6 +118,9 @@ export const initialStocks: Stock[] = [
     min_amount: 5,
     unit: 'Pcs',
     cost_per_unit: 10000,
+    baseline_cost_per_unit: 10000,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-french-fries',
@@ -96,6 +129,9 @@ export const initialStocks: Stock[] = [
     min_amount: 500,
     unit: 'Gram',
     cost_per_unit: 45,
+    baseline_cost_per_unit: 45,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
   {
     id: 'stk-chicken-patty',
@@ -104,5 +140,12 @@ export const initialStocks: Stock[] = [
     min_amount: 5,
     unit: 'Pcs',
     cost_per_unit: 14000,
+    baseline_cost_per_unit: 14000,
+    baseline_source: 'unverified_legacy',
+    conversion_status: 'verified',
   },
 ];
+
+export const CANONICAL_SEED_STOCK_IDS: ReadonlySet<string> = new Set(
+  initialStocks.map(s => s.id)
+);

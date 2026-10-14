@@ -179,7 +179,13 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
   push([cs('POS ARUS KAS', S.thL), cs('NOMINAL (Rp)', S.thR), cs('STATUS', S.thC), cs('KETERANGAN', S.thL), cs('SUMBER', S.thL)]);
 
   push([cs('Uang Masuk (Penjualan)', S.posL), cn(rd.cashIn, S.posR), cs('Masuk', S.posL), cs('Total penerimaan transaksi kasir', S.tdAL), cs(`${rd.totalOrdersCount} Transaksi`, S.tdAL)]);
-  push([cs('Uang Keluar (Pembelian Restok)', S.negL), cn(rd.cashOut, S.negR), cs('Keluar', S.negL), cs('Total pengeluaran bahan baku', S.tdL), cs(`${rd.totalPurchasesCount} Nota`, S.tdL)]);
+  push([cs('Uang Keluar (Total Belanja & Refund)', S.negL), cn(rd.cashOut, S.negR), cs('Keluar', S.negL), cs('Total pengeluaran bahan & refund', S.tdL), cs(`${rd.totalPurchasesCount} Nota Belanja • ${rd.refundCount} Refund`, S.tdL)]);
+  push([cs('  • Belanja Restok Bahan', S.tdL), cn(rd.totalPurchases, S.tdR), cs('Belanja', S.tdC), cs('Pengeluaran belanja bahan baku', S.tdL), cs(`${rd.totalPurchasesCount} Nota`, S.tdL)]);
+  push([cs('  • Refund Tunai (Laci)', S.tdL), cn(rd.cashRefunds, S.tdR), cs('Refund', S.tdC), cs('Pengembalian dana tunai dari laci kasir', S.tdL), cs('Metode Tunai', S.tdL)]);
+  push([cs('  • Refund QRIS / Non-Tunai', S.tdL), cn(rd.qrisRefunds, S.tdR), cs('Refund', S.tdC), cs('Pengembalian dana non-tunai / QRIS', S.tdL), cs('Metode Non-Tunai', S.tdL)]);
+  if (rd.unknownRefunds > 0) {
+    push([cs('  • Refund Tidak Diketahui (Data Lama)', S.tdL), cn(rd.unknownRefunds, S.tdR), cs('Refund', S.tdC), cs('Transaksi refund lama tanpa metode eksplisit', S.tdL), cs('Data Lama', S.tdL)]);
+  }
 
   const cfPos = rd.netCashFlow >= 0;
   push([
@@ -190,7 +196,7 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
     cs('Bukan laba bersih', cfPos ? S.tdAL : S.tdL),
   ]);
   {
-    const r = push([cs('* Selisih Arus Kas bukan laba bersih. Belum mencakup biaya operasional lain (sewa, listrik, gaji, dll).', S.disc), ...fill(S.disc)]);
+    const r = push([cs('* Arus kas operasional merupakan gabungan tunai dan non-tunai, bukan saldo fisik laci kasir. Belum mencakup biaya operasional lain (sewa, listrik, dll).', S.disc), ...fill(S.disc)]);
     fullSpan(r);
   }
   push(emptyRow(NC));
@@ -398,6 +404,80 @@ function buildPurchasesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SHEET 4 — DAFTAR REFUND PERIODE INI
+// ═══════════════════════════════════════════════════════════════════════════════
+function buildRefundsSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
+  const NC = 7;
+  const rows: XLSX.CellObject[][] = [];
+  const merges: XLSX.Range[] = [];
+  let ri = -1;
+
+  function push(row: XLSX.CellObject[]) { rows.push(row); return ++ri; }
+  function fullSpan(r: number) { merges.push({ s: { r, c: 0 }, e: { r, c: NC - 1 } }); }
+  function fill(style: any) { return Array.from({ length: NC - 1 }, () => cs('', style)); }
+
+  // ── HEADER ──────────────────────────────────────────────────────────────────
+  fullSpan(push([cs(storeName.toUpperCase(), S.h1), ...fill(S.h1)]));
+  fullSpan(push([cs('DAFTAR PENGEMBALIAN DANA (REFUND) PERIODE INI', S.h2), ...fill(S.h2)]));
+  fullSpan(push([cs(`Periode: ${rd.periodLabel}`, S.mVal), ...fill(S.mVal)]));
+  push(emptyRow(NC));
+
+  // ── TABLE HEADER ─────────────────────────────────────────────────────────────
+  const headerRow = push([
+    cs('NO. NOTA ASAL', S.thL),
+    cs('WAKTU TRANSAKSI ASAL', S.thL),
+    cs('WAKTU REFUND', S.thL),
+    cs('PETUGAS REFUND', S.thL),
+    cs('METODE REFUND', S.thC),
+    cs('ALASAN REFUND', S.thL),
+    cs('NOMINAL REFUND (Rp)', S.thR),
+  ]);
+
+  // ── DATA ROWS ─────────────────────────────────────────────────────────────────
+  if (rd.periodRefundOrders.length === 0) {
+    const r = push([cs('Tidak ada transaksi refund yang diproses pada periode ini.', S.disc), ...Array(NC - 1).fill(bl())]);
+    fullSpan(r);
+  } else {
+    rd.periodRefundOrders.forEach((o, i) => {
+      const a = i % 2 === 1;
+      const methodLabel = o.refund_method === 'cash'
+        ? 'Tunai (Laci)'
+        : o.refund_method === 'qris'
+        ? 'QRIS / Non-Tunai'
+        : 'Tidak diketahui (data lama)';
+      push([
+        cs(o.order_number, a ? S.tdAL : S.tdL),
+        cs(fdt(o.created_at), a ? S.tdAL : S.tdL),
+        cs(o.refunded_at ? fdt(o.refunded_at) : '-', a ? S.tdAL : S.tdL),
+        cs(o.refunded_by_name || 'Owner', a ? S.tdAL : S.tdL),
+        cs(methodLabel, a ? S.tdAC : S.tdC),
+        cs(o.refund_reason || '-', a ? S.tdAL : S.tdL),
+        cn(Number(o.total_amount) || 0, a ? S.tdAR : S.tdR),
+      ]);
+    });
+  }
+
+  // ── TOTAL ROW ─────────────────────────────────────────────────────────────────
+  {
+    const r = push([
+      cs(`TOTAL REFUND PERIODE — ${rd.refundCount} Transaksi Refund`, S.totL),
+      cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL),
+      cn(rd.totalRefunds, S.totR),
+    ]);
+    merges.push({ s: { r, c: 0 }, e: { r, c: 5 } });
+  }
+
+  // ── WORKSHEET SETUP ───────────────────────────────────────────────────────────
+  const ws = toWS(rows);
+  ws['!merges'] = merges;
+  ws['!cols'] = [{ wch: 22 }, { wch: 22 }, { wch: 22 }, { wch: 18 }, { wch: 24 }, { wch: 24 }, { wch: 20 }];
+  ws['!rows'] = rows.map((_, i) => ({ hpx: i === 0 ? 32 : i === 1 ? 22 : 20 }));
+  ws['!views'] = [{ state: 'frozen', xSplit: 0, ySplit: headerRow + 1 }];
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: headerRow, c: 0 }, e: { r: rows.length - 1, c: NC - 1 } }) };
+  return ws;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 export const exportReportToExcel = ({
@@ -409,6 +489,7 @@ export const exportReportToExcel = ({
   XLSX.utils.book_append_sheet(wb, buildSummarySheet(reportData, storeName), 'Ringkasan Laporan');
   XLSX.utils.book_append_sheet(wb, buildSalesSheet(reportData, storeName), 'Detail Penjualan');
   XLSX.utils.book_append_sheet(wb, buildPurchasesSheet(reportData, storeName), 'Detail Pembelian Restok');
+  XLSX.utils.book_append_sheet(wb, buildRefundsSheet(reportData, storeName), 'Daftar Refund');
   const out = filename || `Laporan_Keuangan_BoothDaily_${new Date().toISOString().slice(0, 10)}`;
   XLSX.writeFile(wb, `${out}.xlsx`);
 };

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Order } from '../../types';
+import { Order, PaymentMethod } from '../../types';
 import { orderService } from '../../services/orderService';
 import { ToastType } from './usePOSToast';
 
@@ -14,7 +14,7 @@ export const usePOSOrders = ({ currentUser, onStockChange, showToast }: UsePOSOr
 
   const refundOrder = async (
     orderId: string,
-    metadata?: { refunded_by_name?: string; refund_reason?: string }
+    metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }
   ): Promise<{ success: boolean; message: string; order?: Order }> => {
     try {
       const meta = {

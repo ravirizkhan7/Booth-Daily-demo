@@ -67,12 +67,20 @@ export const InventoryPage: React.FC = () => {
   const [historyTypeFilter, setHistoryTypeFilter] = useState<string>('ALL');
 
   // Form State for Master Stock Create/Edit
-  const [stockFormData, setStockFormData] = useState({
+  const [stockFormData, setStockFormData] = useState<{
+    name: string;
+    unit: string;
+    current_amount: number;
+    min_amount: number;
+    cost_per_unit: number;
+    baseline_cost_per_unit: number | undefined;
+  }>({
     name: '',
     unit: 'Gram',
     current_amount: 1000,
     min_amount: 200,
-    cost_per_unit: 150
+    cost_per_unit: 150,
+    baseline_cost_per_unit: 150,
   });
   const [editStockNotes, setEditStockNotes] = useState<string>('');
 
@@ -137,7 +145,8 @@ export const InventoryPage: React.FC = () => {
       unit: 'Gram',
       current_amount: 1000,
       min_amount: 200,
-      cost_per_unit: 150
+      cost_per_unit: 150,
+      baseline_cost_per_unit: 150,
     });
     setIsStockModalOpen(true);
   };
@@ -152,7 +161,8 @@ export const InventoryPage: React.FC = () => {
       unit: s.unit,
       current_amount: s.current_amount,
       min_amount: s.min_amount,
-      cost_per_unit: s.cost_per_unit
+      cost_per_unit: s.cost_per_unit,
+      baseline_cost_per_unit: s.baseline_cost_per_unit,
     });
     setIsStockModalOpen(true);
   };
@@ -171,6 +181,22 @@ export const InventoryPage: React.FC = () => {
       return;
     }
 
+    const bAmt = stockFormData.baseline_cost_per_unit !== undefined ? Number(stockFormData.baseline_cost_per_unit) : undefined;
+    if (bAmt !== undefined && (isNaN(bAmt) || !isFinite(bAmt) || bAmt < 0)) {
+      setFormError('Biaya dasar awal (baseline) harus berupa angka valid dan tidak boleh bernilai negatif');
+      return;
+    }
+
+    // Role check if baseline is modified or confirmed
+    if (editingStock && bAmt !== undefined) {
+      const currentBaseline = editingStock.baseline_cost_per_unit ?? 0;
+      const isUnverified = editingStock.baseline_source === 'unverified_legacy' || !editingStock.baseline_source;
+      if ((bAmt !== currentBaseline || isUnverified) && !isOwner) {
+        setFormError('Aksi ditolak: Hanya peran Owner yang berhak mengubah atau mengonfirmasi baseline biaya bahan baku.');
+        return;
+      }
+    }
+
     const isQtyChanged = editingStock !== null && currentAmt !== editingStock.current_amount;
     if (isQtyChanged && !editStockNotes.trim()) {
       setFormError('Keterangan perubahan stok wajib diisi ketika mengubah kuantitas stok bahan.');
@@ -178,12 +204,20 @@ export const InventoryPage: React.FC = () => {
     }
 
     try {
-      const payload = {
+      let baselineToSubmit: number | undefined = undefined;
+      if (isOwner) {
+        baselineToSubmit = bAmt !== undefined && bAmt > 0 ? bAmt : (bAmt === 0 ? 0 : undefined);
+      } else if (!editingStock && bAmt !== undefined && bAmt > 0) {
+        baselineToSubmit = bAmt;
+      }
+
+      const payload: Partial<Stock> & { name: string; unit: string; current_amount: number; min_amount: number; cost_per_unit: number } = {
         name: stockFormData.name.trim(),
         unit: stockFormData.unit,
         current_amount: currentAmt,
         min_amount: Number(stockFormData.min_amount || 0),
         cost_per_unit: Number(stockFormData.cost_per_unit || 0),
+        ...(baselineToSubmit !== undefined ? { baseline_cost_per_unit: baselineToSubmit } : {}),
       };
 
       if (editingStock) {
@@ -508,6 +542,17 @@ export const InventoryPage: React.FC = () => {
                             </div>
                             <p className="text-[10px] text-stone-400 font-semibold mt-0.5">
                               Modal: {formatRupiah(stk.cost_per_unit)} / {stk.unit}
+                              {stk.baseline_cost_per_unit !== undefined && stk.baseline_cost_per_unit > 0 ? (
+                                stk.baseline_source === 'unverified_legacy' || !stk.baseline_source ? (
+                                  <span className="text-amber-500 dark:text-amber-400 font-medium ml-1.5" title="Nilai baseline tersimpan belum diverifikasi oleh Owner">
+                                    • Baseline: {formatRupiah(stk.baseline_cost_per_unit)}/{stk.unit} (Belum terverifikasi)
+                                  </span>
+                                ) : (
+                                  <span className="text-stone-400 ml-1.5">• Baseline: {formatRupiah(stk.baseline_cost_per_unit)}/{stk.unit}</span>
+                                )
+                              ) : (
+                                <span className="text-amber-500 dark:text-amber-400 font-medium ml-1.5">• Baseline: Belum diatur</span>
+                              )}
                             </p>
                           </td>
 
@@ -975,13 +1020,69 @@ export const InventoryPage: React.FC = () => {
                     Harga Modal / {stockFormData.unit} (Rp)
                   </label>
                   <NumberInput
+                    isCurrency={true}
                     min={0}
-                    allowDecimals={true}
                     value={stockFormData.cost_per_unit}
-                    onChange={val => setStockFormData({ ...stockFormData, cost_per_unit: val })}
+                    onChange={val => {
+                      const prevCost = stockFormData.cost_per_unit;
+                      const isBaselineSynced = !editingStock && (stockFormData.baseline_cost_per_unit === prevCost || stockFormData.baseline_cost_per_unit === undefined);
+                      setStockFormData({
+                        ...stockFormData,
+                        cost_per_unit: val,
+                        baseline_cost_per_unit: isBaselineSynced ? val : stockFormData.baseline_cost_per_unit,
+                      });
+                    }}
+                    placeholder="Rp 0"
                     className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold focus:outline-none"
                   />
                 </div>
+              </div>
+
+              {/* Biaya Dasar Awal (Baseline) per Satuan Stok */}
+              <div className="pt-0.5">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-stone-700 dark:text-stone-300">
+                    Biaya Dasar Awal per Satuan Stok (Rp / {stockFormData.unit})
+                  </label>
+                  {!isOwner ? (
+                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+                      Hanya Owner
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-stone-400">
+                      Fallback Nota Terakhir
+                    </span>
+                  )}
+                </div>
+                <NumberInput
+                  isCurrency={true}
+                  min={0}
+                  disabled={!isOwner}
+                  value={stockFormData.baseline_cost_per_unit ?? 0}
+                  onChange={val => {
+                    setStockFormData({ ...stockFormData, baseline_cost_per_unit: val });
+                    setFormError('');
+                  }}
+                  placeholder="Rp 0"
+                  className={`w-full px-3.5 py-2.5 rounded-xl border font-bold focus:outline-none ${
+                    !isOwner
+                      ? 'bg-stone-100 dark:bg-stone-800/50 border-stone-200 dark:border-stone-800 text-stone-400 cursor-not-allowed'
+                      : 'bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700'
+                  }`}
+                />
+                <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-1 leading-relaxed">
+                  Nilai acuan per {stockFormData.unit} yang dipakai ketika tidak ada lagi pembelian valid yang tersisa.
+                  {editingStock && (editingStock.baseline_source === 'unverified_legacy' || !editingStock.baseline_source) && editingStock.baseline_cost_per_unit !== undefined && editingStock.baseline_cost_per_unit > 0 && (
+                    <span className="text-amber-600 dark:text-amber-400 block font-semibold mt-0.5">
+                      (Nilai tersimpan Rp {editingStock.baseline_cost_per_unit.toLocaleString('id-ID')} belum terverifikasi. Simpan perubahan untuk mengonfirmasi baseline ini sebagai Owner.)
+                    </span>
+                  )}
+                  {editingStock && stockFormData.baseline_cost_per_unit === undefined && (
+                    <span className="text-amber-600 dark:text-amber-400 block font-semibold mt-0.5">
+                      (Bahan legacy ini belum memiliki baseline. Biarkan Rp 0 jika belum diketahui.)
+                    </span>
+                  )}
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

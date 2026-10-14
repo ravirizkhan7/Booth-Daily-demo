@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { usePOS } from '../../hooks/usePOS';
-import { X, User, Mail, Key, ShieldCheck, Save, Sparkles, Phone } from 'lucide-react';
+import { X, User, Mail, Key, ShieldCheck, Save, Sparkles, Phone, RefreshCw, Check } from 'lucide-react';
 import { ImageUpload } from './ImageUpload';
+import { generateUniquePin, isPinUnique } from '../../utils/pinUtils';
 
 export const EditAccountModal: React.FC = () => {
   const {
     isEditAccountModalOpen,
     closeEditAccountModal,
     currentUser,
-    updateCurrentUserAccount
+    updateCurrentUserAccount,
+    usersList,
+    showToast
   } = usePOS();
 
   const [name, setName] = useState('');
@@ -16,6 +19,7 @@ export const EditAccountModal: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
+  const [pinFeedback, setPinFeedback] = useState('');
   const [phone, setPhone] = useState('');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [error, setError] = useState('');
@@ -28,6 +32,7 @@ export const EditAccountModal: React.FC = () => {
       setEmail(currentUser.email || '');
       setPassword('');
       setPin('');
+      setPinFeedback('');
       setPhone(currentUser.phone || '');
       setAvatarFile(null);
       setError('');
@@ -35,6 +40,20 @@ export const EditAccountModal: React.FC = () => {
   }, [currentUser, isEditAccountModalOpen]);
 
   if (!isEditAccountModalOpen || !currentUser) return null;
+
+  const handleRandomizePin = () => {
+    try {
+      const candidate = generateUniquePin(usersList, currentUser.id, currentUser.pin, pin);
+      setPin(candidate);
+      setPinFeedback(`Kandidat PIN baru: ${candidate}`);
+      setError('');
+      showToast(`Kandidat PIN baru (${candidate}) dibuat. Klik Simpan Perubahan untuk menerapkan.`, 'info');
+    } catch (err: any) {
+      const msg = err.message || 'Gagal menghasilkan PIN unik.';
+      setError(msg);
+      showToast(msg, 'error');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,9 +90,19 @@ export const EditAccountModal: React.FC = () => {
       return;
     }
 
-    if (cleanPin && !/^\d{4}$/.test(cleanPin)) {
-      setError('PIN harus tepat 4 digit angka.');
-      return;
+    if (cleanPin) {
+      if (!/^\d{4}$/.test(cleanPin)) {
+        setError('PIN baru harus tepat 4 digit angka numerik.');
+        return;
+      }
+      if (currentUser.pin && cleanPin === currentUser.pin) {
+        setError('PIN baru harus berbeda dari PIN lama. Silakan klik tombol acak.');
+        return;
+      }
+      if (!isPinUnique(cleanPin, usersList, currentUser.id)) {
+        setError(`PIN "${cleanPin}" sudah digunakan oleh akun lain. Silakan klik tombol acak.`);
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -95,6 +124,10 @@ export const EditAccountModal: React.FC = () => {
       if (!result.success) {
         setError(result.message);
         return;
+      }
+
+      if (cleanPin) {
+        showToast(`Profil berhasil diperbarui. PIN Baru Anda: ${cleanPin}`, 'success');
       }
 
       closeEditAccountModal();
@@ -240,24 +273,41 @@ export const EditAccountModal: React.FC = () => {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-bold text-stone-700 dark:text-stone-300 flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-[#3B2A1F] dark:text-[#D4A373]" />
-                PIN Transaksi
-              </label>
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-bold text-stone-700 dark:text-stone-300 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#3B2A1F] dark:text-[#D4A373]" />
+                  PIN Transaksi (Read-Only)
+                </label>
+              </div>
 
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                value={pin}
-                onChange={e =>
-                  setPin(
-                    e.target.value.replace(/\D/g, '').slice(0, 4)
-                  )
-                }
-                placeholder="4 digit"
-                className="w-full px-3.5 py-2.5 rounded-2xl bg-stone-50 dark:bg-[#151312] border border-stone-200 dark:border-stone-800 text-stone-900 dark:text-stone-100 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#3B2A1F] dark:focus:ring-[#D4A373] font-mono tracking-widest text-center"
-              />
+              <div className="relative flex items-center">
+                <input
+                  type="text"
+                  readOnly
+                  value={pin}
+                  placeholder="•••• (Klik ikon untuk acak PIN)"
+                  className="w-full pl-3.5 pr-11 py-2.5 rounded-2xl bg-stone-100 dark:bg-[#151312] border border-stone-200 dark:border-stone-800 text-stone-900 dark:text-stone-100 text-sm font-mono tracking-widest text-center cursor-not-allowed select-all focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleRandomizePin}
+                  title="Acak PIN Unik Baru"
+                  className="absolute right-2 p-1.5 rounded-lg text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-200 dark:hover:bg-stone-700 transition-all cursor-pointer active:rotate-180 duration-200"
+                  aria-label="Acak PIN Unik"
+                >
+                  <RefreshCw className="w-4 h-4 text-[#C68B59]" />
+                </button>
+              </div>
+
+              {pinFeedback ? (
+                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mt-1 flex items-center gap-1">
+                  <Check className="w-3 h-3" /> {pinFeedback}
+                </p>
+              ) : (
+                <p className="text-[10px] text-stone-400 mt-0.5">
+                  Klik ikon refresh untuk mengacak kandidat PIN unik baru.
+                </p>
+              )}
             </div>
           </div>
 

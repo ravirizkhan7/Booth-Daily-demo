@@ -17,6 +17,7 @@ const TransactionsPage = React.lazy(() => import('./pages/TransactionsPage').the
 const EmployeesPage = React.lazy(() => import('./pages/EmployeesPage').then(m => ({ default: m.EmployeesPage })));
 const ReportsPage = React.lazy(() => import('./pages/ReportsPage').then(m => ({ default: m.ReportsPage })));
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
+const ShiftsPage = React.lazy(() => import('./pages/ShiftsPage').then(m => ({ default: m.ShiftsPage })));
 
 // Minimal loading fallback for lazy pages
 const PageLoader = () => (
@@ -69,7 +70,8 @@ export default function App() {
             <Route path="/inventory" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><InventoryPage /></ProtectedRoute>} />
             <Route path="/transactions" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><TransactionsPage /></ProtectedRoute>} />
 
-            {/* Owner Only */}
+            {/* Owner + Karyawan */}
+            <Route path="/shifts" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><ShiftsPage /></ProtectedRoute>} />
             <Route path="/products" element={<ProtectedRoute allowedRoles={['owner']}><ProductsPage /></ProtectedRoute>} />
             <Route path="/categories" element={<ProtectedRoute allowedRoles={['owner']}><CategoriesPage /></ProtectedRoute>} />
             <Route path="/purchases" element={<ProtectedRoute allowedRoles={['owner']}><PurchasesPage /></ProtectedRoute>} />

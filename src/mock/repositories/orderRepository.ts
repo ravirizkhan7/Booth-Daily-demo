@@ -1,4 +1,4 @@
-import { Order } from '../../types';
+import { Order, PaymentMethod } from '../../types';
 import { mockStore } from '../store';
 
 export interface GetOrdersParams {
@@ -8,6 +8,9 @@ export interface GetOrdersParams {
   payment_method?: string;
   order_type?: string;
   limit?: number;
+  shift_id?: string;
+  operational_date?: string;
+  include_refunds_in_range?: boolean;
 }
 
 export const orderRepository = {
@@ -23,7 +26,7 @@ export const orderRepository = {
     return mockStore.addOrder(orderData);
   },
 
-  async refundOrder(id: string, metadata?: { refunded_by_name?: string; refund_reason?: string }): Promise<Order> {
+  async refundOrder(id: string, metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }): Promise<Order> {
     return mockStore.refundOrder(id, metadata);
   },
 };
