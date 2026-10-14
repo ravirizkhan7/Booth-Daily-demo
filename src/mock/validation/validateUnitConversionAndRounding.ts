@@ -3382,6 +3382,9 @@ async function runUnitConversionAndRoundingTests() {
       discount: 0,
       total_amount: 20000,
       created_at: '2026-08-01T10:00:00.000Z',
+      created_by_user_id: 'usr-owner-01',
+      created_by_name: 'Owner',
+      created_by_role: 'owner',
       total_hpp: undefined, // Belum dimigrasi
       items: [
         {
@@ -3526,7 +3529,6 @@ async function runUnitConversionAndRoundingTests() {
     try {
       guardedStore.addStock({
         name: 'Stok Baru Ditolak',
-        category: 'Bahan Baku',
         current_amount: 10,
         min_amount: 2,
         unit: 'Gram',
@@ -3615,6 +3617,10 @@ async function runUnitConversionAndRoundingTests() {
         category_id: productSample.category_id,
         price: 30000,
         cost_price: 10000,
+        image_url: '',
+        description: '',
+        is_active: true,
+        is_favorite: false,
       });
     } catch (err: any) {
       if (err.message.includes('DataIntegrityError')) {
@@ -3673,6 +3679,10 @@ async function runUnitConversionAndRoundingTests() {
       guardedStore.addRecipe({
         product_id: 'prd-non-existent',
         ingredients: [],
+        prep_time_minutes: 5,
+        image_url: '',
+        description: '',
+        steps: [],
       });
     } catch (err: any) {
       if (err.message.includes('DataIntegrityError')) {
@@ -3779,6 +3789,8 @@ async function runUnitConversionAndRoundingTests() {
         name: 'User Ditolak',
         email: 'ditolak@boothdaily.com',
         role: 'karyawan',
+        pin: '1234',
+        is_active: true,
       });
     } catch (err: any) {
       if (err.message.includes('DataIntegrityError')) {
@@ -3789,7 +3801,7 @@ async function runUnitConversionAndRoundingTests() {
 
     let addCategoryBlocked = false;
     try {
-      guardedStore.addCategory({ name: 'Kategori Ditolak' });
+      guardedStore.addCategory({ name: 'Kategori Ditolak', icon_name: 'Coffee' });
     } catch (err: any) {
       if (err.message.includes('DataIntegrityError')) {
         addCategoryBlocked = true;
