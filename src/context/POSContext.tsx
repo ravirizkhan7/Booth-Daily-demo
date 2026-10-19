@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useCallback, useRef, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useCallback, useRef, useState, ReactNode, useMemo } from 'react';
 import { Product, Category, Recipe, Order, Stock, Purchase, User, OrderType, PaymentMethod, Settings, StockHistory, DiscountRule, Shift } from '../types';
 import { productService } from '../services/productService';
 import { recipeService } from '../services/recipeService';
@@ -9,7 +9,8 @@ import { discountService } from '../services/discountService';
 import { settingsService } from '../services/settingsService';
 import { subscribePosPublic, leavePosPublic, subscribePosBooth, leavePosBooth, onEchoConnected } from '../services/echo';
 import { mockStore, StorageStatusInfo } from '../mock/store';
-import { saveSecondaryCache } from '../mock/persistence/storage';
+import { saveSecondaryCache, getRestoreJournal } from '../mock/persistence/storage';
+import { backupService, RecoveryResult } from '../services/backupService';
 
 import { usePOSToast } from './pos/usePOSToast';
 import { usePOSAuth } from './pos/usePOSAuth';
@@ -24,6 +25,7 @@ import { usePOSSettings } from './pos/usePOSSettings';
 import { usePOSUsers } from './pos/usePOSUsers';
 import { usePOSDiscounts } from './pos/usePOSDiscounts';
 import { usePOSShift } from './pos/usePOSShift';
+import { usePOSMedia } from './pos/usePOSMedia';
 
 export type { CartItem };
 
@@ -147,6 +149,16 @@ interface POSContextType {
 
   // Storage Integrity
   storageStatusInfo?: StorageStatusInfo;
+
+  // Media & Branding Logos
+  appLogo: string | null;
+  printerLogo: string | null;
+  isLoadingMedia: boolean;
+  uploadAppLogo: (file: File) => Promise<string>;
+  deleteAppLogo: () => Promise<void>;
+  uploadPrinterLogo: (file: File) => Promise<string>;
+  deletePrinterLogo: () => Promise<void>;
+  refreshMedia?: () => Promise<void>;
 }
 
 const POSContext = createContext<POSContextType | undefined>(undefined);
@@ -155,16 +167,67 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Domain 1: Toast
   const { toast, showToast } = usePOSToast();
 
+  // ===== FAIL-CLOSED BOOTSTRAP GATE (S3 R1) =====
+  // Recovery MUST complete before any child component mounts or uses data.
+  // States: 'pending' = recovery in progress, 'ready' = safe to proceed, 'failed' = permanent lock
+  type RecoveryState = 'pending' | 'ready' | 'failed';
+  const [recoveryState, setRecoveryState] = useState<RecoveryState>(() =>
+    getRestoreJournal() ? 'pending' : 'ready'
+  );
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const recoveryRanRef = useRef(false);
+
+  useEffect(() => {
+    if (recoveryRanRef.current) return;
+    recoveryRanRef.current = true;
+
+    if (!getRestoreJournal()) {
+      setRecoveryState('ready');
+      return;
+    }
+
+    console.warn('[POSContext] Jurnal pemulihan terdeteksi. Menjalankan crash recovery sebelum bootstrap...');
+
+    backupService
+      .checkAndRecoverInterruptedRestore()
+      .then((rec: RecoveryResult) => {
+        if (rec.recovered) {
+          if (rec.success) {
+            showToast(rec.message || 'Pemulihan cadangan yang terputus berhasil dinormalisasi.', 'info');
+            setRecoveryState('ready');
+          } else {
+            // ROLLBACK_FAILED — permanent lock
+            const errMsg = rec.error || 'Kegagalan kritis pemulihan cadangan. Sistem terkunci.';
+            setRecoveryError(errMsg);
+            setRecoveryState('failed');
+          }
+        } else {
+          // No recovery needed (journal was stale or empty)
+          setRecoveryState('ready');
+        }
+      })
+      .catch((err: any) => {
+        console.error('[POSContext] Error fatal saat recovery startup:', err);
+        const errMsg = err?.message || 'Kesalahan tidak diketahui saat pemulihan darurat.';
+        setRecoveryError(errMsg);
+        setRecoveryState('failed');
+      });
+  }, [showToast]);
+
   // Domain 0: Storage Integrity Tracking
   const [storageStatusInfo, setStorageStatusInfo] = useState<StorageStatusInfo>(() => mockStore.getStorageStatusInfo());
   const hasShownBootWarningRef = useRef(false);
 
   useEffect(() => {
+    // Only run storage warnings after recovery is complete
+    if (recoveryState !== 'ready') return;
+
     const initialInfo = mockStore.getStorageStatusInfo();
     setStorageStatusInfo(initialInfo);
 
     if (!hasShownBootWarningRef.current) {
       hasShownBootWarningRef.current = true;
+
       if (
         initialInfo.isWriteLocked &&
         (initialInfo.status === 'CORRUPTED_JSON' || initialInfo.status === 'SCHEMA_INVALID')
@@ -202,10 +265,45 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
 
     return unsubscribe;
-  }, [showToast]);
+  }, [showToast, recoveryState]);
 
   // Domain 10: Settings
   const { settings, setSettings } = usePOSSettings();
+
+  // Domain 13: Media (App Logo & Printer Logo)
+  const {
+    appLogo,
+    printerLogo,
+    isLoadingMedia,
+    uploadAppLogo,
+    deleteAppLogo,
+    uploadPrinterLogo,
+    deletePrinterLogo,
+    refreshMedia,
+  } = usePOSMedia({ showToast, enabled: recoveryState === 'ready' });
+
+  // Dynamic Browser Tab Favicon
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    let link: HTMLLinkElement | null = document.querySelector("link[rel*='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = appLogo || '/src/assets/icon.png';
+  }, [appLogo]);
+
+  // Dynamic Browser Tab Title
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const storeName = settings?.store_name?.trim();
+    if (storeName) {
+      document.title = `${storeName}`;
+    } else {
+      document.title = 'Booth Daily';
+    }
+  }, [settings?.store_name]);
 
   // Domain 11: Users List
   const { usersList, setUsersList } = usePOSUsers();
@@ -329,6 +427,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const shiftDomain = usePOSShift({
     currentUser,
     showToast,
+    enabled: recoveryState === 'ready',
   });
   const {
     shifts,
@@ -582,7 +681,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       try {
         await refreshShifts();
-      } catch {}
+      } catch { }
 
       return hasSuccesses && !hasFailures;
     } catch (error) {
@@ -612,13 +711,16 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     refreshDataRef.current = refreshData;
   }, [refreshData]);
 
-  // Initial Data Fetch
+  // Initial Data Fetch — only after recovery gate is cleared
   useEffect(() => {
+    if (recoveryState !== 'ready') return;
     refreshData();
-  }, [refreshData]);
+  }, [refreshData, recoveryState]);
 
   // Realtime Reconnect & Data Synchronization Handler
   useEffect(() => {
+    if (recoveryState !== 'ready') return;
+
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const unbind = onEchoConnected(() => {
@@ -638,10 +740,12 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       unbind();
     };
-  }, [refreshData]);
+  }, [refreshData, recoveryState]);
 
   // Public Realtime WebSocket Subscription (pos-public channel for Guest, Karyawan, Owner)
   useEffect(() => {
+    if (recoveryState !== 'ready') return;
+
     const publicChannel = subscribePosPublic();
     if (!publicChannel) {
       return;
@@ -668,7 +772,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       (payload: { settings: any }) => {
         if (payload?.settings) {
           const normalizedSettings: Settings = {
-            store_name: payload.settings.store_name || 'BOOTH DAILY',
+            store_name: payload.settings.store_name?.trim() ? payload.settings.store_name.trim() : 'BOOTH DAILY',
             tagline: payload.settings.tagline || '',
             address: payload.settings.address || '',
             phone: payload.settings.phone || '',
@@ -744,6 +848,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setUsersList,
     setStockHistories,
     showToast,
+    recoveryState,
   ]);
 
   // Private Reverb Realtime WebSocket Subscription (pos-booth for authenticated staff/owner)
@@ -840,6 +945,65 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     showToast,
   ]);
 
+  // ===== BOOTSTRAP GATE RENDERING =====
+  // Fail-closed: Block entire app tree until crash recovery completes
+
+  if (recoveryState === 'failed') {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', width: '100vw', background: '#1a1a1a', color: '#fff',
+        fontFamily: 'system-ui, -apple-system, sans-serif', padding: '2rem', textAlign: 'center',
+      }}>
+        <div style={{
+          background: '#2d1515', border: '1px solid #7f1d1d', borderRadius: '12px',
+          padding: '2rem', maxWidth: '480px', width: '100%',
+        }}>
+          <div style={{ fontSize: '3rem', marginBottom: '0.5rem' }}>⚠️</div>
+          <h1 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fca5a5', marginBottom: '0.75rem' }}>
+            Kegagalan Kritis Pemulihan Data
+          </h1>
+          <p style={{ fontSize: '0.875rem', color: '#d4d4d4', lineHeight: 1.6, marginBottom: '1rem' }}>
+            Proses pemulihan cadangan yang terputus tidak dapat diselesaikan. Sistem dikunci untuk
+            mencegah kerusakan data lebih lanjut.
+          </p>
+          {recoveryError && (
+            <p style={{
+              fontSize: '0.75rem', color: '#a1a1aa', background: '#18181b',
+              borderRadius: '6px', padding: '0.75rem', wordBreak: 'break-word',
+              border: '1px solid #3f3f46',
+            }}>
+              {recoveryError}
+            </p>
+          )}
+          <p style={{ fontSize: '0.75rem', color: '#a1a1aa', marginTop: '1rem' }}>
+            Muat ulang halaman atau hubungi administrator untuk bantuan.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (recoveryState === 'pending') {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', width: '100vw', background: '#fafaf9', color: '#44403c',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+      }}>
+        <div style={{
+          width: '2.5rem', height: '2.5rem', border: '3px solid #C68B59',
+          borderTopColor: 'transparent', borderRadius: '50%',
+          animation: 'spin 1s linear infinite',
+        }} />
+        <p style={{ marginTop: '1rem', fontSize: '0.875rem', fontWeight: 500, color: '#78716c' }}>
+          Memulihkan data dari interupsi sebelumnya...
+        </p>
+        <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+      </div>
+    );
+  }
+
   return (
     <POSContext.Provider
       value={{
@@ -933,6 +1097,14 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         toast,
         showToast,
         storageStatusInfo,
+        appLogo,
+        printerLogo,
+        isLoadingMedia,
+        uploadAppLogo,
+        deleteAppLogo,
+        uploadPrinterLogo,
+        deletePrinterLogo,
+        refreshMedia,
       }}
     >
       {children}

@@ -90,6 +90,7 @@ export const DashboardPage: React.FC = () => {
     shifts,
     activeShift,
     openReceiptModal,
+    settings,
   } = usePOS();
 
   const isOwner = currentUser?.role === 'owner';
@@ -557,10 +558,12 @@ export const DashboardPage: React.FC = () => {
         return 'Omzet per hari pada bulan berjalan';
       case 'year':
         return `Omzet per bulan tahun ${currentTime.getFullYear()}`;
-      default:
-        return 'Omzet 7 hari terakhir Booth Daily';
+      default: {
+        const storeName = settings?.store_name?.trim() || 'Booth Daily';
+        return `Omzet 7 hari terakhir ${storeName}`;
+      }
     }
-  }, [analyticsPeriod, currentTime]);
+  }, [analyticsPeriod, currentTime, settings?.store_name]);
 
   // 5. Active Shift Financials & Last Closed Shift for Owner
   const activeFinancials = useMemo(() => {
@@ -597,7 +600,7 @@ export const DashboardPage: React.FC = () => {
 
           <p className="text-xs text-stone-300">
             {isOwner
-              ? 'Laporan performa penjualan dan kesehatan operasional Booth Daily.'
+              ? `Laporan performa penjualan dan kesehatan operasional ${settings?.store_name?.trim() || 'Booth Daily'}.`
               : 'Ringkasan aktivitas dan pencapaian transaksi harian Anda.'}
           </p>
         </div>

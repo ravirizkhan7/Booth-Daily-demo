@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Printer, Sparkles } from 'lucide-react';
 import { printTestReceipt } from '../../services/receiptPrint';
+import { usePOS } from '../../hooks/usePOS';
 
 interface NavItem {
   label: string;
@@ -17,9 +18,10 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ filteredNavItems, handleNavClick }) => {
   const location = useLocation();
+  const { settings, printerLogo } = usePOS();
 
   const handleTestPrint = () => {
-    printTestReceipt({ store_name: 'Booth Daily Test', address: 'Testing Address', phone: '0000' });
+    printTestReceipt(settings, printerLogo);
   };
 
   return (
@@ -66,7 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filteredNavItems, handleNavCli
         <div className="p-3 bg-stone-50 dark:bg-[#23201D] rounded-xl border border-stone-200 dark:border-stone-800 text-center space-y-1">
           <div className="flex items-center justify-center gap-1.5 text-[10px] font-extrabold uppercase text-[#C68B59]">
             <Sparkles className="w-3 h-3" />
-            <span>BOOTH DAILY DEMO</span>
+            <span>{(settings?.store_name?.trim() ? settings.store_name.trim().toUpperCase() : 'BOOTH DAILY')} DEMO</span>
           </div>
           <p className="text-[9px] text-stone-400 font-medium">Standalone Portfolio Showcase</p>
         </div>

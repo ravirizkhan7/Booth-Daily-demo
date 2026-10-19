@@ -3,6 +3,7 @@ import { shiftService } from '../../services/shiftService';
 import { userService } from '../../services/userService';
 import { transactionService } from '../../services/transactionService';
 import { calculateShiftFinancials } from '../../utils/shiftCalculation';
+import { sessionManager } from '../repositories/sessionManager';
 
 export async function runReconciliationScenarios() {
   console.log('===============================================================');
@@ -165,6 +166,11 @@ export async function runReconciliationScenarios() {
   // -----------------------------------------------------------------
   console.log('\n--- SKENARIO 5: Review Owner & Alur Koreksi ---');
   // Kasir mencoba review sendiri -> harus ditolak
+  sessionManager.setSession({
+    userId: dindaKasir.id,
+    token: 'tok_dinda_session',
+    loggedInAt: new Date().toISOString(),
+  });
   try {
     await shiftService.reviewShiftReconciliation({
       shift_id: closedS4.id,
@@ -180,6 +186,11 @@ export async function runReconciliationScenarios() {
   }
 
   // Owner mengembalikan untuk koreksi
+  sessionManager.setSession({
+    userId: hendroOwner.id,
+    token: 'tok_hendro_session',
+    loggedInAt: new Date().toISOString(),
+  });
   const rejectedS4 = await shiftService.reviewShiftReconciliation({
     shift_id: closedS4.id,
     action: 'correction_requested',
@@ -288,6 +299,7 @@ export async function runReconciliationScenarios() {
     throw new Error('Skenario 7 Gagal: Shift 2 berubah setelah transaksi di shift 5!');
   }
   console.log('✓ Skenario 7 PASS: Snapshot shift tertutup terbukti permanen dan immutable.');
+  sessionManager.clearSession();
 
   console.log('\n===============================================================');
   console.log('   SELURUH SKENARIO REKONSILIASI LULUS DENGAN SEMPURNA (PASS)');

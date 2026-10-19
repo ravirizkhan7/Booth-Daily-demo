@@ -2325,6 +2325,11 @@ async function runUnitConversionAndRoundingTests() {
     assert(unregRejected, 'Scenario 4a: Pengguna tidak terdaftar ditolak');
 
     // 4b. Pengguna tidak aktif
+    sessionManager.setSession({
+      userId: ownerUser.id,
+      token: 'temp_owner_token',
+      loggedInAt: new Date().toISOString(),
+    });
     const inactiveUser = bStore.addUser({
       name: 'Inactive Owner',
       email: 'inactive_owner@boothdaily.com',
@@ -3867,6 +3872,11 @@ async function runUnitConversionAndRoundingTests() {
 
     // TEST 8: Storage pulih: retry menyimpan migrasi sebelum operasi berikutnya dimulai
     p1b35Driver.failOnWrite = false; // Storage pulih!
+    sessionManager.setSession({
+      userId: ownerUser.id,
+      token: 'owner_healed_token',
+      loggedInAt: new Date().toISOString(),
+    });
     const updatedSettingsResult = guardedStore.updateSettings({
       store_name: 'BOOTH DAILY HEALED SUCCESS',
     });

@@ -35,7 +35,7 @@ export const shiftRepository = {
     shift_id: string;
     action: 'approved_variance' | 'correction_requested';
     notes?: string;
-    user: User;
+    user?: User;
   }): Promise<Shift> {
     return mockStore.reviewShiftReconciliation(payload);
   },

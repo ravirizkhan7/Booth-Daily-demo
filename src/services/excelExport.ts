@@ -490,7 +490,8 @@ export const exportReportToExcel = ({
   XLSX.utils.book_append_sheet(wb, buildSalesSheet(reportData, storeName), 'Detail Penjualan');
   XLSX.utils.book_append_sheet(wb, buildPurchasesSheet(reportData, storeName), 'Detail Pembelian Restok');
   XLSX.utils.book_append_sheet(wb, buildRefundsSheet(reportData, storeName), 'Daftar Refund');
-  const out = filename || `Laporan_Keuangan_BoothDaily_${new Date().toISOString().slice(0, 10)}`;
+  const safeStoreName = (storeName?.trim() || 'BoothDaily').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const out = filename || `Laporan_Keuangan_${safeStoreName}_${new Date().toISOString().slice(0, 10)}`;
   XLSX.writeFile(wb, `${out}.xlsx`);
 };
 

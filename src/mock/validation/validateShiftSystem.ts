@@ -5,6 +5,7 @@ import { transactionService } from '../../services/transactionService';
 import { orderService } from '../../services/orderService';
 import { calculateShiftFinancials, getOperationalDate, formatShiftDuration } from '../../utils/shiftCalculation';
 import { generateUniquePin, isPinUnique, findPinConflicts } from '../../utils/pinUtils';
+import { sessionManager } from '../repositories/sessionManager';
 
 export async function validateShiftSystem(): Promise<{ pass: boolean; errors: string[] }> {
   const errors: string[] = [];
@@ -350,6 +351,11 @@ export async function validateShiftSystem(): Promise<{ pass: boolean; errors: st
     }
 
     // 11.4 Penyimpanan PIN duplikat ditolak pada lapisan store/service
+    sessionManager.setSession({
+      userId: 'usr-owner-01',
+      token: 'tok_owner_hendro',
+      loggedInAt: new Date().toISOString(),
+    });
     try {
       mockStore.addUser({
         name: 'User Duplikat Test',
@@ -540,6 +546,11 @@ export async function validateShiftSystem(): Promise<{ pass: boolean; errors: st
     }
 
     // 12.4 Kasir DILINTANGI menyetujui selisih sendiri
+    sessionManager.setSession({
+      userId: dindaRecon.id,
+      token: 'tok_dinda_session',
+      loggedInAt: new Date().toISOString(),
+    });
     try {
       await shiftService.reviewShiftReconciliation({
         shift_id: closedDiffShift.id,
@@ -555,6 +566,11 @@ export async function validateShiftSystem(): Promise<{ pass: boolean; errors: st
     }
 
     // 12.5 Owner mengembalikan untuk koreksi (correction_requested)
+    sessionManager.setSession({
+      userId: hendroRecon.id,
+      token: 'tok_hendro_session',
+      loggedInAt: new Date().toISOString(),
+    });
     const returnedShift = await shiftService.reviewShiftReconciliation({
       shift_id: closedDiffShift.id,
       action: 'correction_requested',
@@ -671,9 +687,11 @@ export async function validateShiftSystem(): Promise<{ pass: boolean; errors: st
 
     // Restore state
     mockStore.resetMockStore();
+    sessionManager.clearSession();
   } catch (err: any) {
     errors.push(`[Fatal] Pengecualian tak terduga selama validasi shift: ${err.stack || err.message || err}`);
     mockStore.resetMockStore();
+    sessionManager.clearSession();
   }
 
   return {

@@ -149,6 +149,7 @@ export async function validatePhase5(): Promise<{ pass: boolean; errors: string[
     // =========================================================================
     // 6. CROSS-PAGE CONSISTENCY & RESET AUDIT
     // =========================================================================
+    await userService.login('owner@boothdaily.com', 'demo123');
     await settingsService.updateSettings({
       store_name: 'BOOTH DAILY TEST STORE',
       tax_percentage: 12,

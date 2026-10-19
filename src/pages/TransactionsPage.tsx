@@ -7,7 +7,7 @@ import { History, Search, Printer, RotateCcw, RefreshCw } from 'lucide-react';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 
 export const TransactionsPage: React.FC = () => {
-  const { orders, currentUser, openReceiptModal, refundOrder } = usePOS();
+  const { orders, currentUser, openReceiptModal, refundOrder, settings } = usePOS();
   const [search, setSearch] = useState('');
   const [filterMethod, setFilterMethod] = useState<string>('all');
   const [refundingOrder, setRefundingOrder] = useState<Order | null>(null);
@@ -100,7 +100,9 @@ export const TransactionsPage: React.FC = () => {
             Riwayat Transaksi POS
           </h1>
           <p className="text-xs text-stone-500">
-            {isOwner ? 'Daftar semua transaksi yang tercatat di Booth Daily.' : 'Daftar transaksi yang Anda proses hari ini.'}
+            {isOwner
+              ? `Daftar semua transaksi yang tercatat di ${settings?.store_name?.trim() || 'Booth Daily'}.`
+              : 'Daftar transaksi yang Anda proses hari ini.'}
           </p>
         </div>
       </div>

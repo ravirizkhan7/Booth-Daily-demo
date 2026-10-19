@@ -99,10 +99,11 @@ export const ReportsPage: React.FC = () => {
     setIsExporting('excel');
     try {
       const { exportReportToExcel } = await import('../services/excelExport');
+      const effectiveStoreName = settings?.store_name?.trim() || 'Booth Daily';
       exportReportToExcel({
         reportData,
-        storeName: settings?.store_name || 'Booth Daily',
-        filename: `Laporan_Keuangan_${(settings?.store_name || 'BoothDaily').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
+        storeName: effectiveStoreName,
+        filename: `Laporan_Keuangan_${effectiveStoreName.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
       });
       showToast('Laporan Excel (.xlsx) berhasil diunduh', 'success');
     } catch (err) {
@@ -119,13 +120,14 @@ export const ReportsPage: React.FC = () => {
     setIsExporting('pdf');
     try {
       const { exportReportToPDF } = await import('../services/pdfExport');
+      const effectiveStoreName = settings?.store_name?.trim() || 'Booth Daily';
       exportReportToPDF({
         reportData,
-        storeName: settings?.store_name || 'Booth Daily',
+        storeName: effectiveStoreName,
         storeAddress: settings?.address || 'Coffee Booth POS',
         storePhone: settings?.phone || '-',
         printedBy: currentUser?.name || 'Owner',
-        filename: `Laporan_Keuangan_${(settings?.store_name || 'BoothDaily').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
+        filename: `Laporan_Keuangan_${effectiveStoreName.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
       });
       showToast('Laporan PDF berhasil dibuat.', 'success');
     } catch (err) {

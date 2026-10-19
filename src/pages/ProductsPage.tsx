@@ -15,7 +15,8 @@ export const ProductsPage: React.FC = () => {
     addProduct,
     editProduct,
     removeProduct,
-    openRecipeModal
+    openRecipeModal,
+    settings,
   } = usePOS();
 
   const [search, setSearch] = useState('');
@@ -146,7 +147,7 @@ export const ProductsPage: React.FC = () => {
             Kelola Menu & Produk
           </h1>
           <p className="text-xs text-stone-500 font-medium">
-            Tambah, atur harga, foto produk, dan kelola ketersediaan menu Booth Daily.
+            Tambah, atur harga, foto produk, dan kelola ketersediaan menu {settings?.store_name?.trim() || 'Booth Daily'}.
           </p>
         </div>
 

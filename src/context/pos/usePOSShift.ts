@@ -3,13 +3,15 @@ import { Shift, User } from '../../types';
 import { shiftService } from '../../services/shiftService';
 import { userService } from '../../services/userService';
 import { ToastType } from './usePOSToast';
+import { sessionManager } from '../../mock/repositories/sessionManager';
 
 export interface UsePOSShiftProps {
   currentUser: User | null;
   showToast: (message: string, type?: ToastType) => void;
+  enabled?: boolean;
 }
 
-export const usePOSShift = ({ currentUser, showToast }: UsePOSShiftProps) => {
+export const usePOSShift = ({ currentUser, showToast, enabled = true }: UsePOSShiftProps) => {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [activeShift, setActiveShift] = useState<Shift | null>(null);
 
@@ -54,8 +56,9 @@ export const usePOSShift = ({ currentUser, showToast }: UsePOSShiftProps) => {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     refreshShifts();
-  }, [refreshShifts]);
+  }, [refreshShifts, enabled]);
 
   // Aksi Buka Shift
   const handleOpenShift = async (
@@ -155,6 +158,13 @@ export const usePOSShift = ({ currentUser, showToast }: UsePOSShiftProps) => {
       return { success: false, message: 'Hanya Owner yang berwenang meninjau atau menyetujui selisih rekonsiliasi shift.' };
     }
 
+    const prevSession = sessionManager.getSession();
+    sessionManager.setSession({
+      userId: pinAuth.user.id,
+      token: pinAuth.token || `owner_pin_auth_${pinAuth.user.id}`,
+      loggedInAt: new Date().toISOString(),
+    });
+
     try {
       const updatedShift = await shiftService.reviewShiftReconciliation({
         shift_id: payload.shift_id,
@@ -174,6 +184,10 @@ export const usePOSShift = ({ currentUser, showToast }: UsePOSShiftProps) => {
     } catch (err: any) {
       const msg = err.message || 'Gagal mereview shift';
       return { success: false, message: msg };
+    } finally {
+      if (prevSession && prevSession.userId !== pinAuth.user.id) {
+        sessionManager.setSession(prevSession);
+      }
     }
   };
 

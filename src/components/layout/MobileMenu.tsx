@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Printer, X } from 'lucide-react';
 import { printTestReceipt } from '../../services/receiptPrint';
+import { usePOS } from '../../hooks/usePOS';
 import { BrandLogo } from '../common/BrandLogo';
 
 interface NavItem {
@@ -25,11 +26,12 @@ export const MobileMenu: React.FC<MobileMenuProps> = ({
   handleNavClick,
 }) => {
   const location = useLocation();
+  const { settings, printerLogo } = usePOS();
 
   if (!isMobileMenuOpen) return null;
 
   const handleTestPrint = () => {
-    printTestReceipt({ store_name: 'Booth Daily Test', address: 'Testing Address', phone: '0000' });
+    printTestReceipt(settings, printerLogo);
     setIsMobileMenuOpen(false);
   };
 
@@ -87,7 +89,9 @@ export const MobileMenu: React.FC<MobileMenuProps> = ({
           </button>
           
           <div className="pt-2 text-center">
-            <p className="text-xs font-bold text-stone-400">BOOTH DAILY POS</p>
+            <p className="text-xs font-bold text-stone-400">
+              {(settings?.store_name?.trim() ? settings.store_name.trim().toUpperCase() : 'BOOTH DAILY')} POS
+            </p>
           </div>
         </div>
       </div>

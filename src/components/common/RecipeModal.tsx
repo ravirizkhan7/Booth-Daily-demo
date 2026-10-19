@@ -5,7 +5,7 @@ import { getImageUrl } from '../../utils/axios';
 import { X, Clock, Coffee, Sparkles, ChefHat, CheckCircle2 } from 'lucide-react';
 
 export const RecipeModal: React.FC = () => {
-  const { selectedRecipe, selectedRecipeProduct, closeRecipeModal, addToCart } = usePOS();
+  const { selectedRecipe, selectedRecipeProduct, closeRecipeModal, addToCart, settings } = usePOS();
 
   if (!selectedRecipeProduct) return null;
 
@@ -109,7 +109,7 @@ export const RecipeModal: React.FC = () => {
                   <Sparkles className="w-5 h-5 text-[#C68B59] shrink-0 mt-0.5" />
                   <div>
                     <h4 className="text-xs font-bold uppercase tracking-wider text-[#C68B59] mb-1">
-                      Tips Barista Booth Daily
+                      Tips Barista {settings?.store_name?.trim() || 'Booth Daily'}
                     </h4>
                     <p className="text-xs text-stone-700 dark:text-stone-300 leading-relaxed">
                       {selectedRecipe.barista_tips}

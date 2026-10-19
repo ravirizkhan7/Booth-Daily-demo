@@ -3,10 +3,9 @@ import { usePOS } from '../../hooks/usePOS';
 import { formatRupiah, formatDate } from '../../utils/formatters';
 import { X, Printer, Share2, CheckCircle2, RotateCcw } from 'lucide-react';
 import { printReceipt } from '../../services/receiptPrint';
-import brandIcon from '../../assets/icon.png';
 
 export const ReceiptModal: React.FC = () => {
-  const { isReceiptModalOpen, closeReceiptModal, currentReceiptOrder, settings, showToast } = usePOS();
+  const { isReceiptModalOpen, closeReceiptModal, currentReceiptOrder, settings, showToast, printerLogo } = usePOS();
 
   if (!isReceiptModalOpen || !currentReceiptOrder) return null;
 
@@ -19,8 +18,10 @@ export const ReceiptModal: React.FC = () => {
   const tax            = currentReceiptOrder.tax            ?? 0;
   const totalAmount    = currentReceiptOrder.total_amount   ?? 0;
 
+  const storeName = settings?.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
+
   const handlePrint = () => {
-    printReceipt(currentReceiptOrder, settings);
+    printReceipt(currentReceiptOrder, settings, printerLogo);
     showToast('Struk sedang dicetak...', 'success');
   };
 
@@ -31,7 +32,7 @@ export const ReceiptModal: React.FC = () => {
       : formatRupiah(0);
 
     const text = `
-*${settings.store_name}*
+*${storeName}*
 ${settings.address}
 --------------------------------
 No. Pesanan: ${currentReceiptOrder.order_number}
@@ -95,15 +96,17 @@ ${settings.receipt_footer}
           >
             {/* Store Header */}
             <div className="text-center space-y-1 pb-3 border-b border-dashed border-stone-300">
-              <div className="flex justify-center mb-1">
-                <img
-                  src={brandIcon}
-                  alt="Booth Daily"
-                  className="w-10 h-10 object-contain drop-shadow-sm"
-                />
-              </div>
+              {printerLogo && (
+                <div className="flex justify-center mb-1">
+                  <img
+                    src={printerLogo}
+                    alt={storeName}
+                    className="max-h-12 max-w-[140px] object-contain drop-shadow-sm"
+                  />
+                </div>
+              )}
               <div className="font-bold text-sm tracking-wider text-[#3B2A1F]">
-                {settings.store_name}
+                {storeName}
               </div>
               <p className="text-[10px] text-stone-500 uppercase tracking-wider">{settings.tagline}</p>
               <p className="text-[10px] text-stone-600">{settings.address}</p>

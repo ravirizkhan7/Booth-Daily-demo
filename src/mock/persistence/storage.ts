@@ -381,6 +381,100 @@ export function clearPersistedSnapshot(): StorageSaveResult {
 }
 
 /**
+ * Allowlist key LocalStorage yang benar-benar dimiliki oleh aplikasi Booth Daily.
+ * Menjamin factory reset tidak menghapus key pihak ketiga / sistem lain di browser.
+ */
+export const APP_ALLOWLIST_STORAGE_KEYS = [
+  DEMO_STORAGE_KEY,
+  'boothdaily_demo_session',
+  'boothdaily_user_session',
+  'boothdaily_user_data',
+  'token',
+  'token_id',
+  'boothdaily_cached_products',
+  'boothdaily_cached_categories',
+  'boothdaily_cached_stocks',
+] as const;
+
+/**
+ * Memeriksa apakah sebuah key storage adalah milik aplikasi Booth Daily.
+ */
+export function isAppStorageKey(key: string): boolean {
+  if ((APP_ALLOWLIST_STORAGE_KEYS as readonly string[]).includes(key)) {
+    return true;
+  }
+  if (key.startsWith('boothdaily_quarantine_')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Menghapus seluruh data aplikasi dari storage berdasarkan allowlist resmi.
+ * Key di luar allowlist (milik aplikasi lain atau sistem) tidak akan tersentuh.
+ */
+export function clearAppStorageAllowlist(options?: { removeJournal?: boolean }): StorageSaveResult {
+  const storage = getActiveStorage();
+  if (!storage) {
+    return {
+      success: false,
+      errorCode: 'STORAGE_UNAVAILABLE',
+      error: 'Penyimpanan browser tidak tersedia.',
+    };
+  }
+
+  try {
+    // 1. Hapus key terdaftar pada allowlist
+    for (const key of APP_ALLOWLIST_STORAGE_KEYS) {
+      try {
+        storage.removeItem(key);
+      } catch (keyErr) {
+        console.warn(`[MockStorage] Gagal menghapus key allowlist (${key}):`, keyErr);
+      }
+    }
+
+    // 2. Jika diizinkan secara eksplisit, hapus restore journal
+    if (options?.removeJournal) {
+      try {
+        storage.removeItem(RESTORE_JOURNAL_KEY);
+      } catch (jErr) {
+        console.warn('[MockStorage] Gagal menghapus restore journal:', jErr);
+      }
+    }
+
+    // 3. Hapus dynamic quarantine keys yang dibuat oleh booth daily
+    if (typeof storage.getAllKeys === 'function') {
+      const allKeys = storage.getAllKeys();
+      for (const k of allKeys) {
+        if (k.startsWith('boothdaily_quarantine_')) {
+          storage.removeItem(k);
+        }
+      }
+    } else if (typeof window !== 'undefined' && window.localStorage) {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && k.startsWith('boothdaily_quarantine_')) {
+          keysToRemove.push(k);
+        }
+      }
+      for (const k of keysToRemove) {
+        window.localStorage.removeItem(k);
+      }
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('[MockStorage] Gagal membersihkan storage allowlist:', err);
+    return {
+      success: false,
+      errorCode: 'WRITE_FAILED',
+      error: err?.message || 'Gagal membersihkan storage aplikasi.',
+    };
+  }
+}
+
+/**
  * Menyimpan data ke cache sekunder secara aman:
  * - Tidak boleh menulis saat sistem dalam mode proteksi write-lock.
  * - Tidak boleh menulis saat storage unavailable.
@@ -421,4 +515,57 @@ export function getSecondaryCache<T>(key: string): T | null {
     return null;
   }
 }
+
+// ----------------------------------------------------
+// ATOMIC RESTORE RECOVERY JOURNAL (S3)
+// ----------------------------------------------------
+export const RESTORE_JOURNAL_KEY = 'boothdaily_restore_journal';
+
+export type RestoreJournalStage =
+  | 'COMMITTING_LOCAL_STORAGE'
+  | 'COMMITTING_INDEXEDDB'
+  | 'VERIFYING'
+  | 'ROLLBACK_FAILED';
+
+export interface RestoreRecoveryJournal {
+  id: string;
+  startedAt: string;
+  stage: RestoreJournalStage;
+  oldState: MockStoreState;
+  oldMedia: {
+    appLogo: string | null;
+    printerLogo: string | null;
+  };
+}
+
+/**
+ * Menyimpan jurnal pemulihan atomik ke storage.
+ * Melempar error (termasuk QuotaExceededError) jika penulisan gagal, agar transaksi tidak lanjut tanpa proteksi.
+ */
+export function saveRestoreJournal(journal: RestoreRecoveryJournal): void {
+  const storage = getActiveStorage();
+  if (!storage) {
+    throw new Error('Penyimpanan lokal tidak tersedia untuk mencatat jurnal pemulihan.');
+  }
+  storage.setItem(RESTORE_JOURNAL_KEY, JSON.stringify(journal));
+}
+
+export function getRestoreJournal(): RestoreRecoveryJournal | null {
+  const storage = getActiveStorage();
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(RESTORE_JOURNAL_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearRestoreJournal(): void {
+  const storage = getActiveStorage();
+  if (!storage) return;
+  storage.removeItem(RESTORE_JOURNAL_KEY);
+}
+
+
 

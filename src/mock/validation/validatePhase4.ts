@@ -1,4 +1,4 @@
-import { mockStore } from '../store';
+import { mockStore, MockStore } from '../store';
 import { productService } from '../../services/productService';
 import { recipeService } from '../../services/recipeService';
 import { stockService } from '../../services/stockService';
@@ -7,6 +7,10 @@ import { discountService } from '../../services/discountService';
 import { settingsService } from '../../services/settingsService';
 import { userService } from '../../services/userService';
 import { transactionService } from '../../services/transactionService';
+import { shiftService } from '../../services/shiftService';
+import { initialSettings as seedSettings } from '../data/settings';
+import { getReceiptCSS, getTestReceiptHtml, getReceiptHtml } from '../../services/receiptPrint';
+import { mediaStorage } from '../../services/mediaStorage';
 
 export async function validatePhase4(): Promise<{ pass: boolean; errors: string[] }> {
   const errors: string[] = [];
@@ -377,8 +381,10 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
     }
 
     // =========================================================================
-    // 6. DISCOUNT RULES CRUD
+    // 6. DISCOUNT RULES CRUD (Memerlukan Sesi Owner Sah)
     // =========================================================================
+    await userService.login('owner@boothdaily.com', 'demo123');
+
     // 6.1 Create discount rule
     const createdDiscount = await discountService.createDiscountRule({
       name: 'Promo Pelajar Weekend - 15%',
@@ -412,20 +418,420 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
     }
 
     // =========================================================================
-    // 7. SETTINGS UPDATE & PERSISTENCE
+    // 7. SETTINGS UPDATE & PERSISTENCE (S1: CORE SETTINGS ALIGNMENT)
     // =========================================================================
+    // 7.1 Seed settings verification
+    if (seedSettings.operational_day_cutoff_time !== '04:00') {
+      errors.push(`[Settings] Default seed operational_day_cutoff_time expected "04:00", got "${seedSettings.operational_day_cutoff_time}"`);
+    }
+    if (seedSettings.phone !== '081234567890') {
+      errors.push(`[Settings] Default seed phone expected "081234567890", got "${seedSettings.phone}"`);
+    }
+
+    // 7.2 Non-Owner permission restriction
+    await userService.login('dinda@boothdaily.com', 'demo123');
+    try {
+      await settingsService.updateSettings({ operational_day_cutoff_time: '05:00' });
+      errors.push('[Settings-Security] Kasir/karyawan berhasil mengubah settings tanpa role Owner!');
+    } catch {
+      // Expected: assertActiveOwnerSession blocked request
+    }
+    await userService.logout();
+
+    // 7.3 Direct save of seed phone by authenticated Owner
+    await userService.login('owner@boothdaily.com', 'demo123');
     const initialSettings = await settingsService.getSettings();
-    const updatedSettings = await settingsService.updateSettings({
+    try {
+      const savedSeedPhone = await settingsService.updateSettings({
+        phone: seedSettings.phone,
+      });
+      if (savedSeedPhone.phone !== '081234567890') {
+        errors.push(`[Settings-Phone] Direct save of seed phone mismatch: ${savedSeedPhone.phone}`);
+      }
+    } catch (err: any) {
+      errors.push(`[Settings-Phone] Direct save of seed phone threw error: ${err.message}`);
+    }
+
+    // 7.4 Phone validation and consistent normalization
+    // 7.4.a Phone with dashes normalized
+    const phoneWithDashes = await settingsService.updateSettings({ phone: '0812-3456-7890' });
+    if (phoneWithDashes.phone !== '081234567890') {
+      errors.push(`[Settings-Phone] Normalization of dashes failed: expected "081234567890", got "${phoneWithDashes.phone}"`);
+    }
+
+    // 7.4.b Phone with international prefix '+' and spaces normalized
+    const phoneWithPlus = await settingsService.updateSettings({ phone: '+62 812 3456 7890' });
+    if (phoneWithPlus.phone !== '+6281234567890') {
+      errors.push(`[Settings-Phone] Normalization of "+" and spaces failed: expected "+6281234567890", got "${phoneWithPlus.phone}"`);
+    }
+
+    // 7.4.c Reject invalid phone characters
+    try {
+      await settingsService.updateSettings({ phone: '0812-ABCD-5678' });
+      errors.push('[Settings-Phone] Phone with alphabetic characters was not rejected');
+    } catch {
+      // Expected
+    }
+
+    // 7.4.d Reject too short phone (< 8 digits)
+    try {
+      await settingsService.updateSettings({ phone: '12345' });
+      errors.push('[Settings-Phone] Phone < 8 digits was not rejected');
+    } catch {
+      // Expected
+    }
+
+    // 7.4.e Reject too long phone (> 16 digits)
+    try {
+      await settingsService.updateSettings({ phone: '12345678901234567' });
+      errors.push('[Settings-Phone] Phone > 16 digits was not rejected');
+    } catch {
+      // Expected
+    }
+
+    // 7.5 Operational cutoff time updates and reload persistence
+    const savedCutoff = await settingsService.updateSettings({
+      operational_day_cutoff_time: '05:30',
       store_name: 'BOOTH DAILY FLAGSHIP',
       tax_percentage: 10,
     });
-    if (updatedSettings.store_name !== 'BOOTH DAILY FLAGSHIP' || updatedSettings.tax_percentage !== 10) {
-      errors.push('[Settings] updateSettings failed to update store_name or tax_percentage');
+    if (savedCutoff.operational_day_cutoff_time !== '05:30' || savedCutoff.store_name !== 'BOOTH DAILY FLAGSHIP' || savedCutoff.tax_percentage !== 10) {
+      errors.push('[Settings-Cutoff] updateSettings failed to update cutoff time or store_name/tax');
     }
-    // Restore initial settings for continuity
+
+    // Persistence across reload (simulating page reload with new store instance)
+    const reloadedStore = new MockStore();
+    const reloadedSettings = reloadedStore.getSettings();
+    if (reloadedSettings?.operational_day_cutoff_time !== '05:30') {
+      errors.push(`[Settings-Persistence] Cutoff time did not persist after reload: expected "05:30", got "${reloadedSettings?.operational_day_cutoff_time}"`);
+    }
+
+    // 7.5.b S1 Legacy Settings Compatibility Check (Data lama tanpa cutoff memperoleh default 04:00)
+    const legacySettingsObj: any = {
+      store_name: 'BOOTH DAILY LEGACY TEST',
+      tagline: 'Legacy Tagline',
+      address: 'Jl. Legacy No. 1',
+      phone: '081234567890',
+      receipt_header: 'Header',
+      receipt_footer: 'Footer',
+      tax_percentage: 5,
+    };
+    const didNormalize = mockStore.normalizeSettings(legacySettingsObj);
+    if (!didNormalize || legacySettingsObj.operational_day_cutoff_time !== '04:00' || legacySettingsObj.receipt_paper_size !== '80mm') {
+      errors.push('[Settings-Legacy] normalizeSettings failed to populate default "04:00" and "80mm" for legacy settings');
+    }
+
+    // 7.5.c S2 Thermal Receipt Paper Size Setting & Persistence
+    await settingsService.updateSettings({
+      receipt_paper_size: '58mm',
+    });
+    const s58 = await settingsService.getSettings();
+    if (s58.receipt_paper_size !== '58mm') {
+      errors.push(`[Settings-S2] Failed to set receipt_paper_size to '58mm': got "${s58.receipt_paper_size}"`);
+    }
+
+    // Persistence across reload (simulating page reload with new store instance)
+    const reloadedStoreS2 = new MockStore();
+    const reloadedSettingsS2 = reloadedStoreS2.getSettings();
+    if (reloadedSettingsS2?.receipt_paper_size !== '58mm') {
+      errors.push(`[Settings-S2-Persistence] receipt_paper_size did not persist after reload: expected "58mm", got "${reloadedSettingsS2?.receipt_paper_size}"`);
+    }
+
+    // Update back to 80mm
+    await settingsService.updateSettings({
+      receipt_paper_size: '80mm',
+    });
+    const s80 = await settingsService.getSettings();
+    if (s80.receipt_paper_size !== '80mm') {
+      errors.push(`[Settings-S2] Failed to set receipt_paper_size to '80mm': got "${s80.receipt_paper_size}"`);
+    }
+
+    // 7.5.d S2 Legacy Settings Compatibility Check (Data lama tanpa receipt_paper_size memperoleh default '80mm')
+    const legacySettingsS2Obj: any = {
+      store_name: 'BOOTH DAILY LEGACY TEST S2',
+      tagline: 'Legacy Tagline S2',
+      address: 'Jl. Legacy S2 No. 1',
+      phone: '081234567890',
+      receipt_header: 'Header S2',
+      receipt_footer: 'Footer S2',
+      tax_percentage: 5,
+      operational_day_cutoff_time: '04:00',
+    };
+    const didNormalizeS2 = mockStore.normalizeSettings(legacySettingsS2Obj);
+    if (!didNormalizeS2 || legacySettingsS2Obj.receipt_paper_size !== '80mm') {
+      errors.push('[Settings-S2-Legacy] normalizeSettings failed to populate default "80mm" for legacy settings');
+    }
+
+    // 7.5.e S2 Rejection of invalid paper sizes
+    const invalidPaperSizes = ['100mm', 'letter', 'A4', '48mm', ''];
+    for (const badSize of invalidPaperSizes) {
+      try {
+        await settingsService.updateSettings({ receipt_paper_size: badSize as any });
+        errors.push(`[Settings-S2] Invalid receipt_paper_size "${badSize}" was not rejected!`);
+      } catch {
+        // Expected
+      }
+    }
+
+    // 7.5.f S2 Test Receipt & CSS generation verification
+    const css58 = getReceiptCSS('58mm');
+    if (!css58.includes('max-width: 48mm') || !css58.includes('size: 58mm auto')) {
+      errors.push('[Receipt-CSS-58mm] 58mm CSS missing expected max-width: 48mm or size: 58mm auto');
+    }
+    const css80 = getReceiptCSS('80mm');
+    if (!css80.includes('max-width: 78mm')) {
+      errors.push('[Receipt-CSS-80mm] 80mm CSS missing expected max-width: 78mm');
+    }
+
+    // Verify test receipt HTML with draft headers & footers
+    const draftTestSettings = {
+      store_name: 'BOOTH DAILY TEST STORE',
+      receipt_header: 'DRAFT HEADER BELUM DISIMPAN',
+      receipt_footer: 'DRAFT FOOTER BELUM DISIMPAN',
+      receipt_paper_size: '58mm' as const,
+    };
+    const html58 = getTestReceiptHtml(draftTestSettings);
+    if (!html58.includes('DRAFT HEADER BELUM DISIMPAN') || !html58.includes('DRAFT FOOTER BELUM DISIMPAN')) {
+      errors.push('[Receipt-Draft] Test receipt HTML failed to include unsaved draft header/footer');
+    }
+    if (!html58.includes('TEST-58MM-001') || !html58.includes('max-width: 48mm')) {
+      errors.push('[Receipt-Draft-58mm] Test receipt HTML missing 58mm identifiers or 48mm max-width styling');
+    }
+
+    const html80 = getTestReceiptHtml({ ...draftTestSettings, receipt_paper_size: '80mm' });
+    if (!html80.includes('TEST-80MM-001') || !html80.includes('max-width: 78mm')) {
+      errors.push('[Receipt-Draft-80mm] Test receipt HTML missing 80mm identifiers or 78mm max-width styling');
+    }
+
+    // 7.5.g S2.2 Simplified Test Receipt Verification (Pure printer test, no transaction items/financials)
+    if (html58.includes('Subtotal:') || html58.includes('DETAIL PESANAN') || html58.includes('SALINAN STAFF') || html58.includes('Diskon:')) {
+      errors.push('[Receipt-S2.2-Simplify] Test receipt must NOT contain financial details, items, or staff copy');
+    }
+    if (!html58.includes('TEST PRINT THERMAL') || !html58.includes('Test print berhasil.')) {
+      errors.push('[Receipt-S2.2-Simplify] Test receipt missing TEST PRINT THERMAL or "Test print berhasil." message');
+    }
+
+    // 7.5.h S2.2 Printer Logo Presence & Clean Fallback
+    const dummyPrinterLogo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const htmlWithLogo = getTestReceiptHtml(draftTestSettings, dummyPrinterLogo);
+    if (!htmlWithLogo.includes(dummyPrinterLogo) || !htmlWithLogo.includes('class="store-logo"')) {
+      errors.push('[Receipt-S2.2-Logo] getTestReceiptHtml failed to render printerLogo when provided');
+    }
+
+    const htmlWithoutLogo = getTestReceiptHtml(draftTestSettings, null);
+    if (htmlWithoutLogo.includes('class="store-logo"') || htmlWithoutLogo.includes('<img')) {
+      errors.push('[Receipt-S2.2-Fallback] getTestReceiptHtml must cleanly omit store-logo when printerLogo is null');
+    }
+
+    // Test real transaction receipt logo presence & omission
+    const sampleOrder = mockStore.getOrders()[0];
+    if (sampleOrder) {
+      const activeSettings = mockStore.getSettings();
+      const orderHtmlWithLogo = getReceiptHtml(sampleOrder, activeSettings, dummyPrinterLogo);
+      if (!orderHtmlWithLogo.includes(dummyPrinterLogo) || !orderHtmlWithLogo.includes('class="store-logo"')) {
+        errors.push('[Receipt-Order-Logo] getReceiptHtml failed to render printerLogo');
+      }
+      const orderHtmlNoLogo = getReceiptHtml(sampleOrder, activeSettings, null);
+      if (orderHtmlNoLogo.includes('class="store-logo"') || orderHtmlNoLogo.includes('<img')) {
+        errors.push('[Receipt-Order-NoLogo] getReceiptHtml must cleanly omit store-logo when printerLogo is null');
+      }
+    }
+
+    // 7.5.i S2.2 Media Storage Isolation & Immutability Verification
+    const initialOrdersCount = mockStore.getOrders().length;
+    const initialStocksCount = mockStore.getStocks().length;
+    const initialShiftsCount = mockStore.getShifts().length;
+
+    await mediaStorage.saveMedia('app_logo', 'data:image/webp;base64,TEST_APP_LOGO_DATA');
+    await mediaStorage.saveMedia('printer_logo', 'data:image/png;base64,TEST_PRINTER_LOGO_DATA');
+
+    const loadedAppLogo = await mediaStorage.getMedia('app_logo');
+    const loadedPrinterLogo = await mediaStorage.getMedia('printer_logo');
+
+    if (loadedAppLogo !== 'data:image/webp;base64,TEST_APP_LOGO_DATA') {
+      errors.push('[MediaStorage] Failed to save/retrieve app_logo');
+    }
+    if (loadedPrinterLogo !== 'data:image/png;base64,TEST_PRINTER_LOGO_DATA') {
+      errors.push('[MediaStorage] Failed to save/retrieve printer_logo');
+    }
+    if (loadedAppLogo === loadedPrinterLogo) {
+      errors.push('[MediaStorage] app_logo and printer_logo keys must be strictly isolated');
+    }
+
+    // Delete app_logo, verify printer_logo unaffected
+    await mediaStorage.deleteMedia('app_logo');
+    const appAfterDelete = await mediaStorage.getMedia('app_logo');
+    const printerAfterDelete = await mediaStorage.getMedia('printer_logo');
+
+    if (appAfterDelete !== null) {
+      errors.push('[MediaStorage] deleteMedia failed to remove app_logo');
+    }
+    if (printerAfterDelete !== 'data:image/png;base64,TEST_PRINTER_LOGO_DATA') {
+      errors.push('[MediaStorage] Deleting app_logo corrupted printer_logo');
+    }
+
+    // Clean up printer_logo
+    await mediaStorage.deleteMedia('printer_logo');
+
+    // 7.5.j S2.3 Dynamic Store Name Consistency & Non-Destructive Verification
+    const preS23Orders = JSON.parse(JSON.stringify(mockStore.getOrders()));
+    const preS23Shifts = JSON.parse(JSON.stringify(mockStore.getShifts()));
+    const preS23Stocks = JSON.parse(JSON.stringify(mockStore.getStocks()));
+
+    // 1. Update store name to synthetic name 'Kedai Uji Dinamis'
+    await settingsService.updateSettings({ store_name: 'Kedai Uji Dinamis' });
+    const s23Settings = await settingsService.getSettings();
+    if (s23Settings.store_name !== 'Kedai Uji Dinamis') {
+      errors.push('[S2.3-StoreName] Failed to persist new store_name');
+    }
+
+    // 2. Stored store name propagates to getTestReceiptHtml
+    const s23TestReceipt = getTestReceiptHtml(s23Settings);
+    if (!s23TestReceipt.includes('Kedai Uji Dinamis')) {
+      errors.push('[S2.3-TestReceipt] getTestReceiptHtml failed to reflect updated store_name');
+    }
+
+    // 3. Stored store name propagates to getReceiptHtml
+    if (sampleOrder) {
+      const s23OrderReceipt = getReceiptHtml(sampleOrder, s23Settings);
+      if (!s23OrderReceipt.includes('Kedai Uji Dinamis')) {
+        errors.push('[S2.3-OrderReceipt] getReceiptHtml failed to reflect updated store_name');
+      }
+    }
+
+    // 4. Persistence after reload
+    const reloadedStoreS23 = new MockStore();
+    if (reloadedStoreS23.getSettings().store_name !== 'Kedai Uji Dinamis') {
+      errors.push('[S2.3-Persistence] Reloaded MockStore failed to retain store_name');
+    }
+
+    // 5. Update again to ensure no stale components retain previous name
+    await settingsService.updateSettings({ store_name: 'Kedai Kopi Bahagia' });
+    const s23Settings2 = await settingsService.getSettings();
+    const s23TestReceipt2 = getTestReceiptHtml(s23Settings2);
+    if (s23TestReceipt2.includes('Kedai Uji Dinamis') || !s23TestReceipt2.includes('Kedai Kopi Bahagia')) {
+      errors.push('[S2.3-UpdateAgain] Updating store_name retained old store name');
+    }
+
+    // 6. Fallback test when store_name is empty string or only whitespace
+    await settingsService.updateSettings({ store_name: '   ' });
+    const emptySettings = await settingsService.getSettings();
+    const fallbackTestReceipt = getTestReceiptHtml(emptySettings);
+    if (!fallbackTestReceipt.includes('BOOTH DAILY')) {
+      errors.push('[S2.3-Fallback] Empty/whitespace store_name failed to fall back to BOOTH DAILY');
+    }
+
+    // 7. Immutability verification: store name change must NOT mutate orders, shifts, or stocks
+    if (
+      JSON.stringify(mockStore.getOrders()) !== JSON.stringify(preS23Orders) ||
+      JSON.stringify(mockStore.getShifts()) !== JSON.stringify(preS23Shifts) ||
+      JSON.stringify(mockStore.getStocks()) !== JSON.stringify(preS23Stocks)
+    ) {
+      errors.push('[S2.3-Immutability] Changing store_name mutated historical orders, shifts, or stocks!');
+    }
+
+    // Restore original settings
+    await settingsService.updateSettings({
+      store_name: initialSettings.store_name,
+      receipt_paper_size: initialSettings.receipt_paper_size,
+      tax_percentage: initialSettings.tax_percentage,
+      operational_day_cutoff_time: initialSettings.operational_day_cutoff_time,
+    });
+
+    // 7.6 Reject invalid cutoff times (format 24 jam HH:mm)
+    const invalidCutoffs = ['25:00', '99:99', 'invalid', '5:00', '12:60', '-01:00'];
+    for (const badCutoff of invalidCutoffs) {
+      try {
+        await settingsService.updateSettings({ operational_day_cutoff_time: badCutoff });
+        errors.push(`[Settings-Cutoff] Invalid cutoff "${badCutoff}" was not rejected!`);
+      } catch {
+        // Expected
+      }
+    }
+
+    // 7.7 ADDENDUM S1: Shift Immutability before & after cutoff change
+    // 7.7.a Open Shift 1 and close it to create historical closed shift
+    const dindaUser = mockStore.getUsers().find(u => u.name.includes('Dinda'))!;
+    const shift1 = await shiftService.openShift(100000, dindaUser);
+    const closedShift1 = await shiftService.closeShift({
+      shift_id: shift1.id,
+      actual_cash_end: 100000,
+      user: dindaUser,
+    });
+    const closedShift1Date = closedShift1.operational_date;
+
+    // 7.7.b Open Shift 2 as active shift
+    const shift2 = await shiftService.openShift(120000, dindaUser);
+    const shift2ActiveDate = shift2.operational_date;
+
+    // 7.7.c Owner updates cutoff to a different time
+    await settingsService.updateSettings({
+      operational_day_cutoff_time: '23:30',
+    });
+
+    // 7.7.d Assert: Historical closed shift dates MUST NOT change
+    const checkedShift1 = mockStore.getShifts().find(s => s.id === shift1.id);
+    if (!checkedShift1 || checkedShift1.operational_date !== closedShift1Date) {
+      errors.push(`[Shift-Immutability] Closed shift operational_date changed after cutoff update! Expected "${closedShift1Date}", got "${checkedShift1?.operational_date}"`);
+    }
+    // 7.7.e Assert: Currently active shift date MUST NOT change
+    const checkedShift2 = mockStore.getActiveShift();
+    if (!checkedShift2 || checkedShift2.operational_date !== shift2ActiveDate) {
+      errors.push(`[Shift-Immutability] Active shift operational_date changed after cutoff update! Expected "${shift2ActiveDate}", got "${checkedShift2?.operational_date}"`);
+    }
+
+    // 7.7.f Close Shift 2 and verify its date remains locked to original
+    const closedShift2 = await shiftService.closeShift({
+      shift_id: shift2.id,
+      actual_cash_end: 120000,
+      user: dindaUser,
+    });
+    if (closedShift2.operational_date !== shift2ActiveDate) {
+      errors.push(`[Shift-Immutability] Shift 2 date mutated upon closing after cutoff change!`);
+    }
+
+    // 7.7.g Open Shift 3 after cutoff change and verify subsequent shift opens with new cutoff
+    const shift3 = await shiftService.openShift(150000, dindaUser);
+    if (!shift3 || !shift3.operational_date) {
+      errors.push('[Shift-Immutability] Shift 3 failed to open after cutoff change');
+    }
+    await shiftService.closeShift({
+      shift_id: shift3.id,
+      actual_cash_end: 150000,
+      user: dindaUser,
+    });
+
+    // Verify all prior shifts still preserve their original dates
+    const finalShift1 = mockStore.getShifts().find(s => s.id === shift1.id);
+    const finalShift2 = mockStore.getShifts().find(s => s.id === shift2.id);
+    if (finalShift1?.operational_date !== closedShift1Date || finalShift2?.operational_date !== shift2ActiveDate) {
+      errors.push('[Shift-Immutability] Historical shifts operational_date mutated after subsequent shifts!');
+    }
+
+    // 7.8 Verify Data Refresh idempotency (preserves state without wipe/reset)
+    const settingsBeforeRefresh = await settingsService.getSettings();
+    const productsBeforeRefresh = await productService.getProducts();
+    const ordersBeforeRefresh = mockStore.getOrders();
+    const shiftsBeforeRefresh = mockStore.getShifts();
+
+    // Simulate refresh cycle
+    const [freshSettings, freshProducts] = await Promise.all([
+      settingsService.getSettings(),
+      productService.getProducts(),
+    ]);
+    if (freshSettings.store_name !== settingsBeforeRefresh.store_name || freshProducts.length !== productsBeforeRefresh.length) {
+      errors.push('[Settings-Refresh] Refreshing data corrupted state');
+    }
+    if (mockStore.getOrders().length !== ordersBeforeRefresh.length || mockStore.getShifts().length !== shiftsBeforeRefresh.length) {
+      errors.push('[Settings-Refresh] Refreshing data altered orders or shifts');
+    }
+
+    // Restore initial settings for test suite continuity
     await settingsService.updateSettings({
       store_name: initialSettings.store_name,
       tax_percentage: initialSettings.tax_percentage,
+      operational_day_cutoff_time: '04:00',
+      phone: '081234567890',
     });
 
     // =========================================================================
@@ -497,7 +903,9 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
     }
 
     await userService.logout();
+    await userService.login('owner@boothdaily.com', 'demo123');
     await userService.deleteUser(newEmployee.id);
+    await userService.logout();
 
     // =========================================================================
     // 9. REFUND ORDER & STOCK RESTORATION
@@ -553,9 +961,15 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
     }
 
     // 10. Clean up and restore state
+    try {
+      await userService.logout();
+    } catch {}
     mockStore.resetMockStore();
   } catch (err: any) {
     errors.push(`[Fatal] Unexpected exception during Phase 4 validation: ${err.message || err}`);
+    try {
+      await userService.logout();
+    } catch {}
     mockStore.resetMockStore();
   }
 

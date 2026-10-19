@@ -1,11 +1,13 @@
 import { formatRupiah, formatDate } from '../utils/formatters';
-import { Order, Settings } from '../types';
-import brandIcon from '../assets/icon.png';
+import { Order, Settings, ReceiptPaperSize } from '../types';
 
-const getReceiptCSS = () => `
+export const getReceiptCSS = (paperSize: ReceiptPaperSize = '80mm'): string => {
+  const is58mm = paperSize === '58mm';
+
+  return `
 @page {
   margin: 0;
-  size: auto;
+  size: ${is58mm ? '58mm auto' : '80mm auto'};
 }
 
 *, *:before, *:after {
@@ -16,30 +18,34 @@ const getReceiptCSS = () => `
 
 body {
   margin: 0 auto;
-  padding: 12px 8px;
+  padding: ${is58mm ? '6px 3px' : '12px 8px'};
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: ${is58mm ? '9.5px' : '11px'};
+  line-height: ${is58mm ? '1.25' : '1.35'};
   color: #1c1917;
   background: #fff;
   width: 100%;
-  max-width: 78mm;
+  max-width: ${is58mm ? '48mm' : '78mm'};
+  overflow-wrap: break-word;
+  word-break: break-word;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
 
 .receipt-copy {
   width: 100%;
-  max-width: 78mm;
+  max-width: ${is58mm ? '48mm' : '78mm'};
   margin: 0 auto;
   padding: 0;
   box-sizing: border-box;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .staff-copy {
   page-break-before: always;
   break-before: page;
-  padding-top: 12px;
+  padding-top: ${is58mm ? '8px' : '12px'};
 }
 
 .text-center { text-align: center; }
@@ -50,70 +56,75 @@ body {
 .uppercase { text-transform: uppercase; }
 .italic { font-style: italic; }
 
-/* Section dividers — mirroring border-b border-dashed border-stone-300 pb-3 of modal */
+/* Section dividers */
 .border-dashed-b {
   border-bottom: 1px dashed #d6d3d1;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
+  padding-bottom: ${is58mm ? '5px' : '8px'};
+  margin-bottom: ${is58mm ? '5px' : '8px'};
 }
 
 .border-dashed-t {
   border-top: 1px dashed #d6d3d1;
-  padding-top: 8px;
-  margin-top: 8px;
+  padding-top: ${is58mm ? '5px' : '8px'};
+  margin-top: ${is58mm ? '5px' : '8px'};
 }
 
 /* Store Header */
 .store-header {
   text-align: center;
   border-bottom: 1px dashed #d6d3d1;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
+  padding-bottom: ${is58mm ? '5px' : '8px'};
+  margin-bottom: ${is58mm ? '5px' : '8px'};
 }
 
 .store-logo {
   display: flex;
   justify-content: center;
-  margin-bottom: 4px;
+  align-items: center;
+  margin-bottom: ${is58mm ? '3px' : '5px'};
 }
 
 .store-logo img {
-  width: 40px;
-  height: 40px;
+  max-width: ${is58mm ? '38mm' : '55mm'};
+  max-height: ${is58mm ? '24mm' : '30mm'};
+  width: auto;
+  height: auto;
   object-fit: contain;
-  display: inline-block;
+  display: block;
+  margin: 0 auto;
 }
 
 .store-name {
-  font-size: 13px;
+  font-size: ${is58mm ? '11.5px' : '13px'};
   font-weight: 700;
-  letter-spacing: 0.5px;
+  letter-spacing: ${is58mm ? '0.3px' : '0.5px'};
   color: #3b2a1f;
   margin-bottom: 2px;
+  line-height: 1.2;
 }
 
 .staff-badge {
-  font-size: 10.5px;
+  font-size: ${is58mm ? '9px' : '10.5px'};
   font-weight: 700;
-  letter-spacing: 0.8px;
+  letter-spacing: ${is58mm ? '0.5px' : '0.8px'};
   color: #3b2a1f;
-  margin: 3px 0 2px 0;
+  margin: 2px 0;
   text-transform: uppercase;
 }
 
 .tagline {
-  font-size: 9.5px;
+  font-size: ${is58mm ? '8px' : '9.5px'};
   color: #78716c;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  line-height: 1.25;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
   white-space: pre-line;
 }
 
 .address-line {
-  font-size: 9.5px;
+  font-size: ${is58mm ? '8px' : '9.5px'};
   color: #57534e;
-  line-height: 1.25;
+  line-height: 1.2;
   white-space: pre-line;
 }
 
@@ -122,9 +133,9 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  font-size: 10.5px;
-  line-height: 1.35;
-  margin-bottom: 3px;
+  font-size: ${is58mm ? '9px' : '10.5px'};
+  line-height: ${is58mm ? '1.25' : '1.35'};
+  margin-bottom: ${is58mm ? '2px' : '3px'};
 }
 
 .flex-row:last-child {
@@ -141,7 +152,7 @@ body {
 
 /* Items */
 .item-block {
-  margin-bottom: 6px;
+  margin-bottom: ${is58mm ? '4px' : '6px'};
 }
 
 .item-block:last-child {
@@ -151,50 +162,65 @@ body {
 .item-main {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   font-weight: 700;
-  font-size: 10.5px;
-  line-height: 1.35;
+  font-size: ${is58mm ? '9px' : '10.5px'};
+  line-height: ${is58mm ? '1.25' : '1.35'};
+  gap: 4px;
+}
+
+.item-name-col {
+  flex: 1;
+  text-align: left;
+  min-width: 0;
+}
+
+.item-price-col {
+  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .item-notes {
-  font-size: 9.5px;
+  font-size: ${is58mm ? '8px' : '9.5px'};
   font-style: italic;
   color: #78716c;
-  padding-left: 10px;
-  line-height: 1.25;
+  padding-left: ${is58mm ? '6px' : '10px'};
+  line-height: 1.2;
   margin-top: 1px;
 }
 
 .promo-note {
-  font-size: 9.5px;
+  font-size: ${is58mm ? '8px' : '9.5px'};
   font-style: italic;
   color: #059669;
-  padding-left: 8px;
-  line-height: 1.25;
+  padding-left: ${is58mm ? '6px' : '8px'};
+  line-height: 1.2;
   margin-top: -1px;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
 }
 
 /* Total Row */
 .total-row {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  align-items: center;
+  font-size: ${is58mm ? '11.5px' : '13px'};
   font-weight: 900;
   color: #1c1917;
-  padding-top: 3px;
-  margin-bottom: 4px;
+  padding-top: 2px;
+  margin-bottom: ${is58mm ? '2px' : '4px'};
 }
 
 /* Footer */
 .receipt-footer {
   text-align: center;
   border-top: 1px dashed #d6d3d1;
-  padding-top: 8px;
-  margin-top: 8px;
-  font-size: 9.5px;
+  padding-top: ${is58mm ? '5px' : '8px'};
+  margin-top: ${is58mm ? '5px' : '8px'};
+  font-size: ${is58mm ? '8px' : '9.5px'};
   color: #78716c;
-  line-height: 1.35;
+  line-height: 1.25;
   white-space: pre-line;
 }
 
@@ -204,65 +230,139 @@ body {
   margin-top: 2px;
   white-space: pre-line;
 }
+
+.receipt-watermark-test {
+  font-size: ${is58mm ? '7.5px' : '8.5px'};
+  color: #a8a29e;
+  text-align: center;
+  margin-top: 4px;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
 `;
+};
 
-export const printTestReceipt = (settings: Partial<Settings>) => {
-  const date = new Date();
+/**
+ * Generate simplified thermal test receipt HTML.
+ * Purely tests printer layout and connection, NOT a transaction simulation.
+ */
+export const getTestReceiptHtml = (
+  settings: Partial<Settings>,
+  printerLogo?: string | null
+): string => {
+  const paperSize: ReceiptPaperSize = settings.receipt_paper_size === '58mm' ? '58mm' : '80mm';
+  const storeName = settings.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
+  const now = new Date();
+  const dateFormatted = `${now.toLocaleDateString('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })}, ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`;
 
-  const html = `
+  const logoHtml = printerLogo
+    ? `<div class="store-logo"><img src="${printerLogo}" alt="${storeName}" /></div>`
+    : '';
+
+  const testReceipt = `
+    <div class="receipt-copy">
+
+      <!-- Store Header -->
+      <div class="store-header">
+        ${logoHtml}
+        <div class="store-name">${storeName}</div>
+        <div class="staff-badge">TEST PRINT THERMAL</div>
+        ${settings.tagline ? `<div class="tagline">${settings.tagline}</div>` : ''}
+        ${settings.address ? `<div class="address-line">${settings.address}</div>` : ''}
+        ${settings.phone ? `<div class="address-line">Telp: ${settings.phone}</div>` : ''}
+      </div>
+
+      <!-- Test Information -->
+      <div class="border-dashed-b">
+        <div class="flex-row">
+          <span class="label-dim">ID Uji:</span>
+          <span class="font-bold">TEST-${paperSize.toUpperCase()}-001</span>
+        </div>
+        <div class="flex-row">
+          <span class="label-dim">Ukuran Kertas:</span>
+          <span class="font-bold uppercase" style="color: #2563eb;">Thermal ${paperSize} (${paperSize === '58mm' ? 'max 48mm' : 'max 78mm'})</span>
+        </div>
+        <div class="flex-row">
+          <span class="label-dim">Waktu Pengujian:</span>
+          <span>${dateFormatted}</span>
+        </div>
+      </div>
+
+      <!-- Saved Receipt Header (if configured) -->
+      ${
+        settings.receipt_header
+          ? `
+            <div class="border-dashed-b text-center">
+              <div class="value-dim">${settings.receipt_header}</div>
+            </div>
+          `
+          : ''
+      }
+
+      <!-- Test Message -->
+      <div class="border-dashed-b text-center font-bold" style="padding: 8px 0; font-size: ${paperSize === '58mm' ? '10px' : '11.5px'}; color: #059669;">
+        Test print berhasil.
+      </div>
+
+      <!-- Saved Receipt Footer (if configured) -->
+      ${
+        settings.receipt_footer
+          ? `
+            <div class="receipt-footer">
+              <div class="receipt-footer-bold">${settings.receipt_footer}</div>
+            </div>
+          `
+          : ''
+      }
+
+    </div>
+  `;
+
+  return `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="UTF-8">
-      <title>Test Print</title>
+      <title>Test_Print_${paperSize}</title>
       <style>
-        ${getReceiptCSS()}
+        ${getReceiptCSS(paperSize)}
       </style>
     </head>
-
     <body>
-
-      <div class="receipt-copy">
-
-        <div class="store-header">
-          <div class="store-logo">
-            <img src="${brandIcon}" alt="Booth Daily" />
-          </div>
-          <div class="store-name">${settings.store_name || 'BOOTH DAILY'}</div>
-          <div class="staff-badge">PRINTER TEST</div>
-        </div>
-
-        <div class="border-dashed-b">
-          <div class="flex-row">
-            <span class="label-dim">Tanggal:</span>
-            <span>${date.toLocaleDateString('id-ID')}</span>
-          </div>
-          <div class="flex-row">
-            <span class="label-dim">Waktu:</span>
-            <span>${date.toLocaleTimeString('id-ID')}</span>
-          </div>
-        </div>
-
-        <div class="border-dashed-b text-center font-bold" style="padding: 6px 0;">
-          Test print berhasil.
-        </div>
-
-        <div class="receipt-footer">
-          <div>${settings.store_name || 'Booth Daily'}</div>
-          <div class="receipt-footer-bold">Printer Test OK</div>
-        </div>
-
-      </div>
-
+      ${testReceipt}
     </body>
     </html>
   `;
+};
 
+/**
+ * Print simplified test receipt using active/draft settings and printer logo.
+ */
+export const printTestReceipt = (
+  settings: Partial<Settings>,
+  printerLogo?: string | null
+) => {
+  const html = getTestReceiptHtml(settings, printerLogo);
   executePrint(html);
 };
 
-export const printReceipt = (order: Order, settings: Settings) => {
-  const storeName = settings.store_name || 'BOOTH DAILY';
+/**
+ * Generate full Order Receipt HTML with customer and staff copies.
+ */
+export const getReceiptHtml = (
+  order: Order,
+  settings: Settings,
+  printerLogo?: string | null
+): string => {
+  const paperSize: ReceiptPaperSize = settings.receipt_paper_size === '58mm' ? '58mm' : '80mm';
+  const storeName = settings.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
+  const logoHtml = printerLogo
+    ? `<div class="store-logo"><img src="${printerLogo}" alt="${storeName}" /></div>`
+    : '';
 
   const orderType =
     order.order_type === 'dine_in'
@@ -295,8 +395,8 @@ export const printReceipt = (order: Order, settings: Settings) => {
       (item) => `
         <div class="item-block">
           <div class="item-main">
-            <span>${item.qty}x ${item.product_name}</span>
-            <span>${formatRupiah(item.subtotal)}</span>
+            <span class="item-name-col">${item.qty}x ${item.product_name}</span>
+            <span class="item-price-col">${formatRupiah(item.subtotal)}</span>
           </div>
           ${
             item.notes
@@ -313,7 +413,7 @@ export const printReceipt = (order: Order, settings: Settings) => {
       (item) => `
         <div class="item-block">
           <div class="item-main">
-            <span>${item.qty}x ${item.product_name}</span>
+            <span class="item-name-col">${item.qty}x ${item.product_name}</span>
           </div>
           ${
             item.notes
@@ -330,9 +430,7 @@ export const printReceipt = (order: Order, settings: Settings) => {
 
       <!-- Store Header -->
       <div class="store-header">
-        <div class="store-logo">
-          <img src="${brandIcon}" alt="Booth Daily" />
-        </div>
+        ${logoHtml}
         <div class="store-name">${storeName}</div>
         ${settings.tagline ? `<div class="tagline">${settings.tagline}</div>` : ''}
         ${settings.address ? `<div class="address-line">${settings.address}</div>` : ''}
@@ -426,9 +524,7 @@ export const printReceipt = (order: Order, settings: Settings) => {
 
       <!-- Store Header with SALINAN STAFF -->
       <div class="store-header">
-        <div class="store-logo">
-          <img src="${brandIcon}" alt="Booth Daily" />
-        </div>
+        ${logoHtml}
         <div class="store-name">${storeName}</div>
         <div class="staff-badge">SALINAN STAFF</div>
         ${settings.tagline ? `<div class="tagline">${settings.tagline}</div>` : ''}
@@ -458,7 +554,7 @@ export const printReceipt = (order: Order, settings: Settings) => {
 
       <!-- Staff Detail Items -->
       <div class="border-dashed-b">
-        <div class="font-bold" style="font-size: 10px; text-decoration: underline; margin-bottom: 4px;">
+        <div class="font-bold" style="font-size: ${paperSize === '58mm' ? '8.5px' : '10px'}; text-decoration: underline; margin-bottom: 4px;">
           DETAIL PESANAN:
         </div>
         ${staffItemsHtml}
@@ -472,14 +568,14 @@ export const printReceipt = (order: Order, settings: Settings) => {
     </div>
   `;
 
-  const html = `
+  return `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="UTF-8">
       <title>Receipt_${order.order_number}</title>
       <style>
-        ${getReceiptCSS()}
+        ${getReceiptCSS(paperSize)}
       </style>
     </head>
     <body>
@@ -488,11 +584,25 @@ export const printReceipt = (order: Order, settings: Settings) => {
     </body>
     </html>
   `;
+};
 
+/**
+ * Print customer & staff order receipts.
+ */
+export const printReceipt = (
+  order: Order,
+  settings: Settings,
+  printerLogo?: string | null
+) => {
+  const html = getReceiptHtml(order, settings, printerLogo);
   executePrint(html);
 };
 
 const executePrint = (html: string) => {
+  if (typeof document === 'undefined') {
+    return;
+  }
+
   const iframe = document.createElement('iframe');
 
   iframe.style.position = 'fixed';
@@ -507,7 +617,9 @@ const executePrint = (html: string) => {
   const doc = iframe.contentWindow?.document;
 
   if (!doc) {
-    document.body.removeChild(iframe);
+    if (iframe.parentNode) {
+      document.body.removeChild(iframe);
+    }
     return;
   }
 

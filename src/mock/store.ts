@@ -36,6 +36,8 @@ import {
   loadPersistedSnapshot,
   savePersistedSnapshot,
   clearPersistedSnapshot,
+  getRestoreJournal,
+  clearRestoreJournal,
   StorageLoadStatus,
   StorageLoadResult,
   StorageSaveResult,
@@ -165,6 +167,27 @@ export class MockStore {
   public getPinVerificationTicket(ticketId: string): PinVerificationTicket | undefined {
     const t = this.pinVerificationTickets.get(ticketId);
     return t ? deepClone(t) : undefined;
+  }
+
+  /**
+   * Normalisasi pengaturan toko (Settings) untuk kompatibilitas data legacy:
+   * 1. Memastikan field operational_day_cutoff_time memiliki default '04:00'
+   *    jika data lama di storage belum memilikinya.
+   * 2. Memastikan field receipt_paper_size memiliki default '80mm' (max-width: 78mm)
+   *    jika data lama di storage belum memilikinya atau nilainya tidak valid.
+   */
+  public normalizeSettings(settings: Settings): boolean {
+    if (!settings || typeof settings !== 'object') return false;
+    let hasChanges = false;
+    if (!settings.operational_day_cutoff_time || !settings.operational_day_cutoff_time.trim()) {
+      settings.operational_day_cutoff_time = '04:00';
+      hasChanges = true;
+    }
+    if (!settings.receipt_paper_size || (settings.receipt_paper_size !== '58mm' && settings.receipt_paper_size !== '80mm')) {
+      settings.receipt_paper_size = '80mm';
+      hasChanges = true;
+    }
+    return hasChanges;
   }
 
   /**
@@ -474,11 +497,30 @@ export class MockStore {
   }
 
   private initInitialState(): MockStoreState {
+    // Cek apakah terdapat jurnal pemulihan restore yang terputus di tengah jalan
+    const pendingJournal = getRestoreJournal();
+    if (pendingJournal) {
+      if (pendingJournal.stage === 'ROLLBACK_FAILED') {
+        console.error('[MockStore] Jurnal pemulihan berstatus ROLLBACK_FAILED. Mengunci penyimpanan.');
+        this.isWriteLocked = true;
+      } else {
+        // Terdapat transaksi restore yang terputus di tengah jalan.
+        // Terapkan strategi Fail-Safe Rollback to Baseline:
+        // 1. Pulihkan LocalStorage ke oldState secara sinkron agar tidak ada data parsial aktif di RAM/Storage.
+        // 2. Kunci penulisan (isWriteLocked = true) hingga IndexedDB tervalidasi pulih.
+        // 3. JANGAN hapus jurnal! Jurnal wajib dipertahankan agar recovery asinkron media
+        //    dapat dijalankan dan memulihkan IndexedDB di lifecycle bootstrap aplikasi.
+        console.warn(`[MockStore] Terdeteksi proses restore terhenti pada stage "${pendingJournal.stage}". Menyiapkan snapshot awal LocalStorage dan mengunci mutasi.`);
+        savePersistedSnapshot(pendingJournal.oldState);
+        this.isWriteLocked = true;
+      }
+    }
+
     const loadResult = loadPersistedSnapshot();
     this.storageStatus = loadResult.status;
 
     if (loadResult.status === 'SUCCESS' && loadResult.data) {
-      this.isWriteLocked = false;
+      this.isWriteLocked = pendingJournal ? true : false;
       this.lastSaveResult = { success: true };
       this.corruptionDetails = null;
 
@@ -486,6 +528,7 @@ export class MockStore {
       const diskSnapshot = deepClone(loadResult.data);
       this.lastSavedState = diskSnapshot;
 
+      this.normalizeSettings(loadResult.data.settings);
       const stocksChanged = this.normalizeStocks(loadResult.data.stocks, loadResult.data.stockHistories);
       const ordersMigration = this.stabilizeLegacyOrderHPPSnapshots(
         loadResult.data.orders,
@@ -609,6 +652,12 @@ export class MockStore {
   // ----------------------------------------------------
   // RESET / SNAPSHOT / INTEGRITY QUERIES
   // ----------------------------------------------------
+  /**
+   * @internal KHUSUS PENGUJIAN OTOMATIS (TEST HARNESS)
+   * Mengembalikan in-memory store ke default seed state untuk isolasi deterministic test.
+   * Dilarang digunakan pada komponen UI runtime aplikasi.
+   * Untuk reset pabrik resmi aplikasi, gunakan factoryResetService.executeFactoryReset().
+   */
   public resetMockStore(): void {
     const clearResult = clearPersistedSnapshot();
     if (!clearResult.success && clearResult.errorCode === 'STORAGE_UNAVAILABLE') {
@@ -631,6 +680,55 @@ export class MockStore {
     this.lastSavedState = deepClone(this.state);
     this.lastSaveResult = { success: true };
     this.persist();
+  }
+
+  /**
+   * @internal Digunakan oleh factoryResetService setelah validasi otorisasi Owner
+   * dan pembersihan allowlist storage & media berhasil dilakukan.
+   */
+  public reseedStore(): void {
+    this.isWriteLocked = false;
+    this.hasPendingMigrationPersist = false;
+    this.needsNormalizedPersist = false;
+    this.storageStatus = 'SUCCESS';
+    this.corruptionDetails = null;
+    this.state = this.createDefaultSeedState();
+    this.lastSavedState = deepClone(this.state);
+    this.lastSaveResult = { success: true };
+    this.persist();
+    this.notifyStorageListeners();
+  }
+
+  /**
+   * Memulihkan seluruh snapshot state dari cadangan yang telah divalidasi.
+   * Dilindungi oleh otorisasi Owner aktif dan persistensi atomik ke LocalStorage.
+   */
+  public restoreSnapshot(newState: MockStoreState, bypassSessionGuard: boolean = false): void {
+    if (!bypassSessionGuard) {
+      this.assertActiveOwnerSession('memulihkan data cadangan');
+    }
+    this.state = deepClone(newState);
+    this.isWriteLocked = false;
+    this.hasPendingMigrationPersist = false;
+    this.needsNormalizedPersist = false;
+    this.storageStatus = 'SUCCESS';
+    this.corruptionDetails = null;
+    this.persist();
+  }
+
+  /**
+   * Mengatur status proteksi tulis (write-lock) secara terkendali.
+   */
+  public setWriteLock(locked: boolean): void {
+    this.isWriteLocked = locked;
+    this.notifyStorageListeners();
+  }
+
+  /**
+   * Mengembalikan status proteksi tulis (write-lock) saat ini.
+   */
+  public getIsWriteLocked(): boolean {
+    return this.isWriteLocked;
   }
 
   /**
@@ -783,84 +881,135 @@ export class MockStore {
     return deepClone(matching[0]);
   }
 
+  /**
+   * Memvalidasi bahwa pemanggil memiliki sesi aktif yang terikat pada
+   * pengguna terdaftar, aktif, dan memiliki role 'owner'.
+   * Tidak mempercayai metadata atau payload caller.
+   */
+  public assertActiveOwnerSession(actionDescription: string): User {
+    const session = sessionManager.getSession();
+    if (!session?.userId) {
+      throw new Error(`Aksi ditolak: Sesi login Owner aktif diperlukan untuk ${actionDescription}.`);
+    }
+
+    const sessionUser = (this.state.users || []).find(
+      u => String(u.id) === String(session.userId)
+    );
+
+    if (!sessionUser) {
+      throw new Error(`Aksi ditolak: Pengguna sesi tidak ditemukan.`);
+    }
+
+    if (!sessionUser.is_active) {
+      throw new Error(`Aksi ditolak: Akun pengguna dinonaktifkan atau tidak aktif.`);
+    }
+
+    if (sessionUser.role !== 'owner') {
+      throw new Error(`Hanya Owner yang berwenang ${actionDescription}.`);
+    }
+
+    return sessionUser;
+  }
+
   public addUser(userData: Omit<User, 'id'> & { id?: string }): User {
     this.ensureMigrationPersisted();
-    const emailLower = (userData.email || '').trim().toLowerCase();
-    if (this.state.users.some(u => u.email.trim().toLowerCase() === emailLower)) {
-      throw new Error('Email sudah digunakan oleh pengguna lain');
-    }
-    if (userData.pin) {
-      const cleanPin = userData.pin.trim();
-      if (!/^\d{4}$/.test(cleanPin)) {
-        throw new Error('PIN harus berupa 4 digit angka numerik (0-9)');
+    this.assertActiveOwnerSession('menambahkan pengguna baru');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const emailLower = (userData.email || '').trim().toLowerCase();
+      if (this.state.users.some(u => u.email.trim().toLowerCase() === emailLower)) {
+        throw new Error('Email sudah digunakan oleh pengguna lain');
       }
-      if (this.state.users.some(u => u.pin && u.pin.trim() === cleanPin)) {
-        throw new Error(`PIN "${cleanPin}" sudah digunakan oleh akun lain. Setiap pengguna wajib memiliki PIN unik.`);
+      if (userData.pin) {
+        const cleanPin = userData.pin.trim();
+        if (!/^\d{4}$/.test(cleanPin)) {
+          throw new Error('PIN harus berupa 4 digit angka numerik (0-9)');
+        }
+        if (this.state.users.some(u => u.pin && u.pin.trim() === cleanPin)) {
+          throw new Error(`PIN "${cleanPin}" sudah digunakan oleh akun lain. Setiap pengguna wajib memiliki PIN unik.`);
+        }
+        userData.pin = cleanPin;
       }
-      userData.pin = cleanPin;
+      const newUser: User = {
+        ...userData,
+        id: userData.id || `usr-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        email: emailLower,
+        password: userData.password || 'demo123',
+        is_active: userData.is_active ?? true,
+      };
+      this.state.users.push(newUser);
+      this.persist();
+      return deepClone(newUser);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const newUser: User = {
-      ...userData,
-      id: userData.id || `usr-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      email: emailLower,
-      password: userData.password || 'demo123',
-      is_active: userData.is_active ?? true,
-    };
-    this.state.users.push(newUser);
-    this.persist();
-    return deepClone(newUser);
   }
 
   public updateUser(id: string, userData: Partial<User>): User {
     this.ensureMigrationPersisted();
-    const index = this.state.users.findIndex(u => String(u.id) === String(id));
-    if (index === -1) {
-      throw new Error(`User with ID ${id} not found`);
-    }
-    if (userData.email) {
-      const emailLower = userData.email.trim().toLowerCase();
-      if (
-        this.state.users.some(
-          u => String(u.id) !== String(id) && u.email.trim().toLowerCase() === emailLower
-        )
-      ) {
-        throw new Error('Email sudah digunakan oleh pengguna lain');
+    this.assertActiveOwnerSession('memperbarui data pengguna');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.users.findIndex(u => String(u.id) === String(id));
+      if (index === -1) {
+        throw new Error(`User with ID ${id} not found`);
       }
-    }
-    if (userData.pin) {
-      const cleanPin = userData.pin.trim();
-      if (!/^\d{4}$/.test(cleanPin)) {
-        throw new Error('PIN harus berupa 4 digit angka numerik (0-9)');
+      if (userData.email) {
+        const emailLower = userData.email.trim().toLowerCase();
+        if (
+          this.state.users.some(
+            u => String(u.id) !== String(id) && u.email.trim().toLowerCase() === emailLower
+          )
+        ) {
+          throw new Error('Email sudah digunakan oleh pengguna lain');
+        }
       }
-      if (
-        this.state.users.some(
-          u => String(u.id) !== String(id) && u.pin && u.pin.trim() === cleanPin
-        )
-      ) {
-        throw new Error(`PIN "${cleanPin}" sudah digunakan oleh akun lain. Setiap pengguna wajib memiliki PIN unik.`);
+      if (userData.pin) {
+        const cleanPin = userData.pin.trim();
+        if (!/^\d{4}$/.test(cleanPin)) {
+          throw new Error('PIN harus berupa 4 digit angka numerik (0-9)');
+        }
+        if (
+          this.state.users.some(
+            u => String(u.id) !== String(id) && u.pin && u.pin.trim() === cleanPin
+          )
+        ) {
+          throw new Error(`PIN "${cleanPin}" sudah digunakan oleh akun lain. Setiap pengguna wajib memiliki PIN unik.`);
+        }
+        userData.pin = cleanPin;
       }
-      userData.pin = cleanPin;
+      const updated: User = {
+        ...this.state.users[index],
+        ...userData,
+        id: this.state.users[index].id,
+      };
+      this.state.users[index] = updated;
+      this.persist();
+      return deepClone(updated);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const updated: User = {
-      ...this.state.users[index],
-      ...userData,
-      id: this.state.users[index].id,
-    };
-    this.state.users[index] = updated;
-    this.persist();
-    return deepClone(updated);
   }
 
   public deleteUser(id: string): boolean {
     this.ensureMigrationPersisted();
-    if (String(id) === 'usr-owner-01') {
-      throw new Error('Akun Owner utama tidak dapat dihapus');
+    this.assertActiveOwnerSession('menghapus pengguna');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      if (String(id) === 'usr-owner-01') {
+        throw new Error('Akun Owner utama tidak dapat dihapus');
+      }
+      const initialLen = this.state.users.length;
+      this.state.users = this.state.users.filter(u => String(u.id) !== String(id));
+      const deleted = this.state.users.length < initialLen;
+      if (deleted) this.persist();
+      return deleted;
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const initialLen = this.state.users.length;
-    this.state.users = this.state.users.filter(u => String(u.id) !== String(id));
-    const deleted = this.state.users.length < initialLen;
-    if (deleted) this.persist();
-    return deleted;
   }
 
   // ----------------------------------------------------
@@ -1792,65 +1941,69 @@ export class MockStore {
     shift_id: string;
     action: 'approved_variance' | 'correction_requested';
     notes?: string;
-    user: User;
+    user?: User;
   }): Shift {
     this.ensureMigrationPersisted();
-    if (payload.user.role !== 'owner') {
-      throw new Error('Hanya Owner yang berwenang meninjau atau menyetujui selisih rekonsiliasi shift.');
+    const verifiedOwner = this.assertActiveOwnerSession('meninjau atau menyetujui selisih rekonsiliasi shift');
+
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const shiftIndex = (this.state.shifts || []).findIndex(s => s.id === payload.shift_id);
+      if (shiftIndex === -1) {
+        throw new Error('Data shift tidak ditemukan.');
+      }
+
+      const shift = this.state.shifts[shiftIndex];
+      if (shift.status !== 'closed') {
+        throw new Error('Hanya shift yang sudah ditutup yang dapat direview.');
+      }
+
+      if (!shift.snapshot) {
+        throw new Error('Snapshot keuangan shift tidak ditemukan.');
+      }
+
+      const currentStatus = shift.reconciliation_status || shift.snapshot.reconciliation_status;
+      if (currentStatus === 'approved_variance' || currentStatus === 'matched' || currentStatus === 'matched_corrected') {
+        throw new Error('Shift sudah memiliki status final dan tidak dapat direview ulang.');
+      }
+
+      const prevStatus = currentStatus;
+      const newStatus = payload.action === 'approved_variance'
+        ? ('approved_variance' as const)
+        : ('correction_requested' as const);
+
+      const now = new Date();
+      shift.reconciliation_status = newStatus;
+      shift.snapshot.reconciliation_status = newStatus;
+      shift.reviewed_by_user_id = verifiedOwner.id;
+      shift.reviewed_by_name = verifiedOwner.name;
+      shift.reviewed_at = now.toISOString();
+      shift.review_action = payload.action;
+      shift.review_notes = payload.notes || undefined;
+
+      const reviewAudit = {
+        id: `sat-${Date.now()}-review`,
+        action: payload.action === 'approved_variance' ? ('review_approved' as const) : ('review_rejected' as const),
+        user_id: verifiedOwner.id,
+        user_name: verifiedOwner.name,
+        user_role: verifiedOwner.role,
+        timestamp: now.toISOString(),
+        notes: payload.notes || undefined,
+        previous_status: prevStatus,
+        new_status: newStatus,
+      };
+
+      if (!Array.isArray(shift.audit_trail)) {
+        shift.audit_trail = [];
+      }
+      shift.audit_trail.push(reviewAudit);
+
+      this.persist();
+      return deepClone(shift);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-
-    const shiftIndex = (this.state.shifts || []).findIndex(s => s.id === payload.shift_id);
-    if (shiftIndex === -1) {
-      throw new Error('Data shift tidak ditemukan.');
-    }
-
-    const shift = this.state.shifts[shiftIndex];
-    if (shift.status !== 'closed') {
-      throw new Error('Hanya shift yang sudah ditutup yang dapat direview.');
-    }
-
-    if (!shift.snapshot) {
-      throw new Error('Snapshot keuangan shift tidak ditemukan.');
-    }
-
-    const currentStatus = shift.reconciliation_status || shift.snapshot.reconciliation_status;
-    if (currentStatus === 'approved_variance' || currentStatus === 'matched' || currentStatus === 'matched_corrected') {
-      throw new Error('Shift sudah memiliki status final dan tidak dapat direview ulang.');
-    }
-
-    const prevStatus = currentStatus;
-    const newStatus = payload.action === 'approved_variance'
-      ? ('approved_variance' as const)
-      : ('correction_requested' as const);
-
-    const now = new Date();
-    shift.reconciliation_status = newStatus;
-    shift.snapshot.reconciliation_status = newStatus;
-    shift.reviewed_by_user_id = payload.user.id;
-    shift.reviewed_by_name = payload.user.name;
-    shift.reviewed_at = now.toISOString();
-    shift.review_action = payload.action;
-    shift.review_notes = payload.notes || undefined;
-
-    const reviewAudit = {
-      id: `sat-${Date.now()}-review`,
-      action: payload.action === 'approved_variance' ? ('review_approved' as const) : ('review_rejected' as const),
-      user_id: payload.user.id,
-      user_name: payload.user.name,
-      user_role: payload.user.role,
-      timestamp: now.toISOString(),
-      notes: payload.notes || undefined,
-      previous_status: prevStatus,
-      new_status: newStatus,
-    };
-
-    if (!Array.isArray(shift.audit_trail)) {
-      shift.audit_trail = [];
-    }
-    shift.audit_trail.push(reviewAudit);
-
-    this.persist();
-    return deepClone(shift);
   }
 
   public correctShiftReconciliation(payload: {
@@ -2859,88 +3012,172 @@ export class MockStore {
     discount_percentage: number;
     is_active?: boolean;
   }): DiscountRule {
+    this.assertActiveOwnerSession('mengelola promo diskon');
     this.ensureMigrationPersisted();
-    const newRule: DiscountRule = {
-      id: `disc-${Date.now()}`,
-      name: payload.name,
-      minimum_purchase: Number(payload.minimum_purchase) || 0,
-      discount_percentage: Number(payload.discount_percentage) || 0,
-      is_active: payload.is_active ?? true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    this.state.discountRules.push(newRule);
-    this.persist();
-    return deepClone(newRule);
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const newRule: DiscountRule = {
+        id: `disc-${Date.now()}`,
+        name: payload.name,
+        minimum_purchase: Number(payload.minimum_purchase) || 0,
+        discount_percentage: Number(payload.discount_percentage) || 0,
+        is_active: payload.is_active ?? true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      this.state.discountRules.push(newRule);
+      this.persist();
+      return deepClone(newRule);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   public updateDiscountRule(
     id: string | number,
     payload: Partial<DiscountRule>
   ): DiscountRule {
+    this.assertActiveOwnerSession('mengelola promo diskon');
     this.ensureMigrationPersisted();
-    const index = this.state.discountRules.findIndex(
-      r => String(r.id) === String(id)
-    );
-    if (index === -1) {
-      throw new Error(`DiscountRule with ID ${id} not found`);
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.discountRules.findIndex(
+        r => String(r.id) === String(id)
+      );
+      if (index === -1) {
+        throw new Error(`DiscountRule with ID ${id} not found`);
+      }
+      const updated: DiscountRule = {
+        ...this.state.discountRules[index],
+        ...payload,
+        id: this.state.discountRules[index].id,
+        updated_at: new Date().toISOString(),
+      };
+      this.state.discountRules[index] = updated;
+      this.persist();
+      return deepClone(updated);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const updated: DiscountRule = {
-      ...this.state.discountRules[index],
-      ...payload,
-      id: this.state.discountRules[index].id,
-      updated_at: new Date().toISOString(),
-    };
-    this.state.discountRules[index] = updated;
-    this.persist();
-    return deepClone(updated);
   }
 
   public toggleActiveDiscountRule(id: string | number): DiscountRule {
+    this.assertActiveOwnerSession('mengelola promo diskon');
     this.ensureMigrationPersisted();
-    const index = this.state.discountRules.findIndex(
-      r => String(r.id) === String(id)
-    );
-    if (index === -1) {
-      throw new Error(`DiscountRule with ID ${id} not found`);
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.discountRules.findIndex(
+        r => String(r.id) === String(id)
+      );
+      if (index === -1) {
+        throw new Error(`DiscountRule with ID ${id} not found`);
+      }
+      const current = Boolean(this.state.discountRules[index].is_active);
+      this.state.discountRules[index].is_active = !current;
+      this.state.discountRules[index].updated_at = new Date().toISOString();
+      this.persist();
+      return deepClone(this.state.discountRules[index]);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const current = Boolean(this.state.discountRules[index].is_active);
-    this.state.discountRules[index].is_active = !current;
-    this.state.discountRules[index].updated_at = new Date().toISOString();
-    this.persist();
-    return deepClone(this.state.discountRules[index]);
   }
 
   public deleteDiscountRule(id: string | number): boolean {
+    this.assertActiveOwnerSession('mengelola promo diskon');
     this.ensureMigrationPersisted();
-    const initialLen = this.state.discountRules.length;
-    this.state.discountRules = this.state.discountRules.filter(
-      r => String(r.id) !== String(id)
-    );
-    const deleted = this.state.discountRules.length < initialLen;
-    if (deleted) this.persist();
-    return deleted;
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const initialLen = this.state.discountRules.length;
+      this.state.discountRules = this.state.discountRules.filter(
+        r => String(r.id) !== String(id)
+      );
+      const deleted = this.state.discountRules.length < initialLen;
+      if (deleted) this.persist();
+      return deleted;
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   // ----------------------------------------------------
   // SETTINGS
   // ----------------------------------------------------
   public getSettings(): Settings {
-    return deepClone(this.state.settings);
+    const s = this.state.settings;
+    return deepClone({
+      ...s,
+      operational_day_cutoff_time: s?.operational_day_cutoff_time || '04:00',
+      receipt_paper_size: s?.receipt_paper_size === '58mm' ? '58mm' : '80mm',
+    });
   }
 
   public updateSettings(newSettings: Partial<Settings>): Settings {
     this.ensureMigrationPersisted();
-    this.state.settings = {
-      ...this.state.settings,
-      ...newSettings,
-      tax_percentage:
-        newSettings.tax_percentage !== undefined
-          ? Number(newSettings.tax_percentage)
-          : this.state.settings.tax_percentage,
-    };
-    this.persist();
-    return deepClone(this.state.settings);
+    this.assertActiveOwnerSession('mengubah pengaturan toko');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      if (newSettings.operational_day_cutoff_time !== undefined) {
+        const trimmedCutoff = String(newSettings.operational_day_cutoff_time).trim();
+        const cutoffRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+        if (!cutoffRegex.test(trimmedCutoff)) {
+          throw new Error('Format jam cutoff operasional tidak valid. Gunakan format 24 jam HH:mm (contoh: 04:00 atau 23:30).');
+        }
+      }
+
+      if (newSettings.receipt_paper_size !== undefined) {
+        if (newSettings.receipt_paper_size !== '58mm' && newSettings.receipt_paper_size !== '80mm') {
+          throw new Error('Ukuran kertas struk tidak valid. Pilih antara 58mm atau 80mm.');
+        }
+      }
+
+      let normalizedPhone = this.state.settings.phone;
+      if (newSettings.phone !== undefined) {
+        const rawPhone = String(newSettings.phone).trim();
+        if (rawPhone) {
+          if (!/^[+]?[\d\s\-().]+$/.test(rawPhone)) {
+            throw new Error('Nomor telepon mengandung karakter tidak valid.');
+          }
+          const digitsOnly = rawPhone.replace(/\D/g, '');
+          if (digitsOnly.length < 8 || digitsOnly.length > 16) {
+            throw new Error('Nomor telepon harus memiliki 8 hingga 16 digit angka.');
+          }
+          normalizedPhone = (rawPhone.startsWith('+') ? '+' : '') + digitsOnly;
+        } else {
+          normalizedPhone = '';
+        }
+      }
+
+      this.state.settings = {
+        ...this.state.settings,
+        ...newSettings,
+        store_name:
+          newSettings.store_name !== undefined
+            ? String(newSettings.store_name).trim()
+            : this.state.settings.store_name,
+        tax_percentage:
+          newSettings.tax_percentage !== undefined
+            ? Number(newSettings.tax_percentage)
+            : this.state.settings.tax_percentage,
+        operational_day_cutoff_time:
+          newSettings.operational_day_cutoff_time !== undefined
+            ? String(newSettings.operational_day_cutoff_time).trim()
+            : (this.state.settings.operational_day_cutoff_time || '04:00'),
+        receipt_paper_size:
+          newSettings.receipt_paper_size !== undefined
+            ? newSettings.receipt_paper_size
+            : (this.state.settings.receipt_paper_size || '80mm'),
+        phone: normalizedPhone,
+      };
+      this.persist();
+      return deepClone(this.state.settings);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 }
 

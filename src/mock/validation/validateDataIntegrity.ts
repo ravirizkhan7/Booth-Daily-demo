@@ -23,6 +23,7 @@ import {
   StorageDriver,
   DEMO_STORAGE_KEY,
 } from '../persistence/storage';
+import { sessionManager } from '../repositories/sessionManager';
 import { shiftService } from '../../services/shiftService';
 import { transactionService } from '../../services/transactionService';
 import { orderService } from '../../services/orderService';
@@ -127,7 +128,13 @@ export async function validateDataIntegrity(): Promise<{ pass: boolean; errors: 
       errors.push('[Test 3] Expected quarantine key to be created for corrupted JSON');
     }
 
-    // Coba lakukan mutasi saat write-locked
+    // Coba lakukan mutasi saat write-locked (menggunakan sesi Owner yang sah)
+    sessionManager.setSession({
+      userId: 'usr-owner-01',
+      token: 'test-owner-token',
+      loggedInAt: new Date().toISOString(),
+    });
+
     let mutationBlocked = false;
     try {
       mockStore.updateSettings({ store_name: 'Overwritten Toko' });
@@ -136,6 +143,8 @@ export async function validateDataIntegrity(): Promise<{ pass: boolean; errors: 
       if (!err.message?.includes('DataIntegrityError')) {
         errors.push(`[Test 3] Expected DataIntegrityError on write-locked mutation, got: ${err.message}`);
       }
+    } finally {
+      sessionManager.clearSession();
     }
 
     if (!mutationBlocked) {

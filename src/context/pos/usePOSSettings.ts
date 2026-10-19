@@ -10,7 +10,9 @@ export const defaultSettings: Settings = {
   receipt_footer: '',
   tax_percentage: 0,
   service_charge_percentage: 0,
-  currency_symbol: 'Rp'
+  currency_symbol: 'Rp',
+  operational_day_cutoff_time: '04:00',
+  receipt_paper_size: '80mm',
 };
 
 export const usePOSSettings = () => {

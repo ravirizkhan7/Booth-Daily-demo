@@ -22,7 +22,7 @@ import { generateUniquePin, isPinUnique, findPinConflicts } from '../utils/pinUt
 const DEFAULT_PASSWORD = 'demo123';
 
 export const EmployeesPage: React.FC = () => {
-  const { usersList, refreshData, showToast } = usePOS();
+  const { usersList, refreshData, showToast, settings } = usePOS();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
 
@@ -275,7 +275,7 @@ export const EmployeesPage: React.FC = () => {
             Kelola Tim & Karyawan
           </h1>
           <p className="text-xs text-stone-500">
-            Atur akun, PIN otorisasi transaksi, foto profil, status, dan hak akses staf Booth Daily.
+            Atur akun, PIN otorisasi transaksi, foto profil, status, dan hak akses staf {settings?.store_name?.trim() || 'Booth Daily'}.
           </p>
         </div>
 

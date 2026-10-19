@@ -15,7 +15,7 @@ export interface PDFReportOptions {
 export const exportReportToPDF = ({
   reportData,
   storeName = 'Booth Daily',
-  storeAddress = 'Booth Daily POS Outlet',
+  storeAddress = 'Outlet POS',
   storePhone = '-',
   printedBy = 'Owner',
   filename
@@ -437,18 +437,20 @@ export const exportReportToPDF = ({
 
   // Page Numbers
   const totalPages = (doc as any).internal.getNumberOfPages();
+  const effectiveStoreName = storeName?.trim() || 'Booth Daily';
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
     doc.setFontSize(7.5);
     doc.setTextColor(140, 140, 140);
     doc.text(
-      `Booth Daily POS • Laporan Keuangan & Bisnis • Halaman ${i} dari ${totalPages}`,
+      `${effectiveStoreName} POS • Laporan Keuangan & Bisnis • Halaman ${i} dari ${totalPages}`,
       pageWidth / 2,
       pageHeight - 7,
       { align: 'center' }
     );
   }
 
-  const outFilename = filename || `Laporan_Keuangan_BoothDaily_${new Date().toISOString().slice(0, 10)}`;
+  const safeStoreName = effectiveStoreName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const outFilename = filename || `Laporan_Keuangan_${safeStoreName}_${new Date().toISOString().slice(0, 10)}`;
   doc.save(`${outFilename}.pdf`);
 };

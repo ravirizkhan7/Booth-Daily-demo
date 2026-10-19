@@ -94,3 +94,70 @@ export async function getCroppedCompressedFile(
   const baseName = originalFileName.replace(/\.[^/.]+$/, '') || 'foto-produk';
   return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' });
 }
+
+const ALLOWED_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const MAX_RAW_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+export async function processLogoImage(
+  file: File,
+  options: {
+    maxDimension?: number;
+    format?: 'image/webp' | 'image/png';
+    quality?: number;
+  } = {}
+): Promise<string> {
+  const { maxDimension = 512, format = 'image/webp', quality = 0.85 } = options;
+
+  if (!file || !(file instanceof File)) {
+    throw new Error('File gambar tidak valid.');
+  }
+
+  if (!ALLOWED_MIME_TYPES.includes(file.type.toLowerCase())) {
+    throw new Error('Format file tidak didukung. Harap gunakan file PNG, JPEG, atau WebP.');
+  }
+
+  if (file.size > MAX_RAW_FILE_SIZE) {
+    throw new Error('Ukuran file terlalu besar. Maksimal ukuran gambar adalah 5MB.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Gagal membaca file gambar.'));
+    reader.onload = async () => {
+      try {
+        const dataUrl = reader.result as string;
+        const img = await createImage(dataUrl);
+
+        let width = img.naturalWidth || img.width;
+        let height = img.naturalHeight || img.height;
+
+        if (!width || !height) {
+          throw new Error('Dimensi gambar tidak valid.');
+        }
+
+        const maxSide = Math.max(width, height);
+        if (maxSide > maxDimension) {
+          const ratio = maxDimension / maxSide;
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          throw new Error('Canvas 2D context tidak tersedia.');
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const processedDataUrl = canvas.toDataURL(format, quality);
+        resolve(processedDataUrl);
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error('Gagal memproses gambar logo.'));
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+}

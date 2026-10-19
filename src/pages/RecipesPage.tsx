@@ -19,7 +19,8 @@ export const RecipesPage: React.FC = () => {
     saveRecipeData,
     removeRecipe,
     openRecipeModal,
-    currentUser
+    currentUser,
+    settings,
   } = usePOS();
 
   const isOwner = currentUser?.role === 'owner';
@@ -71,7 +72,7 @@ export const RecipesPage: React.FC = () => {
       product_id: defaultProductId,
       prep_time_minutes: 3,
       image_url: '',
-      description: 'Resep standar pembuatan minuman Booth Daily.',
+      description: `Resep standar pembuatan minuman ${settings?.store_name?.trim() || 'Booth Daily'}.`,
       barista_tips: 'Gunakan bahan bersuhu dingin agar cita rasa terjaga.',
       ingredients: stocks.length > 0 ? [
         {

@@ -18,7 +18,10 @@
     "validate:recon": "tsx src/mock/validation/validateShiftReconciliationScenarios.ts",
     "validate:integrity": "tsx src/mock/validation/validateDataIntegrity.ts",
     "validate:formatting": "tsx src/mock/validation/validateNumberInputFormatting.ts",
-    "validate:units": "tsx src/mock/validation/validateUnitConversionAndRounding.ts"
+    "validate:units": "tsx src/mock/validation/validateUnitConversionAndRounding.ts",
+    "validate:security": "tsx src/mock/validation/validateSecurityFixes.ts",
+    "validate:backup": "tsx src/mock/validation/validateBackupRestore.ts",
+    "validate:reset": "tsx src/mock/validation/validateFactoryReset.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

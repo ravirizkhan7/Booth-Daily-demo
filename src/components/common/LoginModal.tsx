@@ -4,7 +4,7 @@ import { X, Lock, User, Key, Check, ShieldAlert, KeyRound, ChevronRight } from '
 import { DemoAccountsModal } from './DemoAccountsModal';
 
 export const LoginModal: React.FC = () => {
-  const { isLoginModalOpen, closeLoginModal, loginUser } = usePOS();
+  const { isLoginModalOpen, closeLoginModal, loginUser, settings } = usePOS();
   const [identifier, setIdentifier] = useState<string>('');
   const [secret, setSecret] = useState<string>('');
   const [error, setError] = useState<string>('');
@@ -54,7 +54,9 @@ export const LoginModal: React.FC = () => {
               </div>
               <div>
                 <h2 className="text-base font-black tracking-wide">Login Ke Sistem POS</h2>
-                <p className="text-xs text-[#D4A373]/80 font-medium">Booth Daily Management</p>
+                <p className="text-xs text-[#D4A373]/80 font-medium">
+                  {settings?.store_name?.trim() || 'Booth Daily'} Management
+                </p>
               </div>
             </div>
             <button

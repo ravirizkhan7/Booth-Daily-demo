@@ -271,6 +271,8 @@ export interface Order {
   refund_method?: PaymentMethod;
 }
 
+export type ReceiptPaperSize = '58mm' | '80mm';
+
 export interface Settings {
   store_name: string;
   tagline: string;
@@ -282,4 +284,5 @@ export interface Settings {
   service_charge_percentage: number;
   currency_symbol: string;
   operational_day_cutoff_time?: string;
+  receipt_paper_size?: ReceiptPaperSize;
 }
