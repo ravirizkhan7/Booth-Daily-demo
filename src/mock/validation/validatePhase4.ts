@@ -18,6 +18,7 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
   try {
     // 0. Ensure fresh initial state for deterministic testing
     mockStore.resetMockStore();
+    await userService.login('owner@boothdaily.com', 'demo123');
 
     // =========================================================================
     // 1. PRODUCT CRUD & FAVORITE

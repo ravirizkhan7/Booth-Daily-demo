@@ -202,6 +202,12 @@ async function runUnitConversionAndRoundingTests() {
     user: ownerUser,
   });
 
+  sessionManager.setSession({
+    userId: ownerUser.id,
+    token: 'test-owner-token-units',
+    loggedInAt: new Date().toISOString(),
+  });
+
   // Tambahkan bahan berstatus unverified_legacy
   const legacyStock = testStore.addStock({
     name: 'Kopi Bubuk Kiloan Curah',

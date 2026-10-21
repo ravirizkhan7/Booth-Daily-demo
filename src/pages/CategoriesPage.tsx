@@ -88,13 +88,16 @@ export const CategoriesPage: React.FC = () => {
       return;
     }
 
-    if (editingCategory) {
-      await editCategory(editingCategory.id, formData);
-    } else {
-      await addCategory(formData);
+    try {
+      if (editingCategory) {
+        await editCategory(editingCategory.id, formData);
+      } else {
+        await addCategory(formData);
+      }
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setFormError(err.message || 'Gagal menyimpan kategori');
     }
-
-    setIsModalOpen(false);
   };
 
   const getIconComponent = (iconName: string) => {

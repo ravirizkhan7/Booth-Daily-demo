@@ -87,11 +87,17 @@ export async function validatePhase5(): Promise<{ pass: boolean; errors: string[
     // =========================================================================
     // 4. HISTORICAL SNAPSHOT IMMUTABILITY AUDIT
     // =========================================================================
-    // 4.1 Update product price from 22000 to 29000
+    // 4.1 Update product price from 22000 to 29000 (requires Owner session)
+    sessionManager.setSession({
+      userId: 'usr-owner-01',
+      token: 'owner-session-phase5',
+      loggedInAt: new Date().toISOString(),
+    });
     await productService.updateProduct('prd-kopi-susu-aren', {
       name: 'Kopi Susu Gula Aren Supreme',
       price: 29000,
     });
+    sessionManager.clearSession();
 
     // 4.2 Historical order snapshot MUST remain 22000 and original name
     const reloadedGuestOrder = await orderService.getOrderById(guestOrder.id);

@@ -66,6 +66,13 @@ class MockIsolatedStorage implements StorageDriver {
 export async function validateDataIntegrity(): Promise<{ pass: boolean; errors: string[] }> {
   const errors: string[] = [];
 
+  // Set active Owner session for managerial operations throughout test suite
+  sessionManager.setSession({
+    userId: 'usr-owner-01',
+    token: 'owner-session-token-integrity',
+    loggedInAt: new Date().toISOString(),
+  });
+
   try {
     // =========================================================================
     // 1. FRESH INSTALL MEMUAT SEED NORMAL
@@ -143,8 +150,6 @@ export async function validateDataIntegrity(): Promise<{ pass: boolean; errors: 
       if (!err.message?.includes('DataIntegrityError')) {
         errors.push(`[Test 3] Expected DataIntegrityError on write-locked mutation, got: ${err.message}`);
       }
-    } finally {
-      sessionManager.clearSession();
     }
 
     if (!mutationBlocked) {
@@ -576,6 +581,7 @@ export async function validateDataIntegrity(): Promise<{ pass: boolean; errors: 
   } finally {
     // Bersihkan storage driver tiruan agar lingkungan kembali ke default
     setStorageDriver(undefined);
+    sessionManager.clearSession();
   }
 
   return {

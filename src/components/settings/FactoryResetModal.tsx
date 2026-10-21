@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, AlertTriangle, Lock, Eye, EyeOff, Loader2, RotateCcw, CheckCircle2 } from 'lucide-react';
 import { factoryResetService } from '../../services/factoryResetService';
+import { usePOS } from '../../hooks/usePOS';
 
 interface FactoryResetModalProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
   showToast,
   onSuccess,
 }) => {
+  const { setRecoveryState, setRecoveryError } = usePOS();
   const [step, setStep] = useState<1 | 2>(1);
   const [confirmedLoss, setConfirmedLoss] = useState(false);
   const [ownerPin, setOwnerPin] = useState('');
@@ -61,7 +63,15 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
 
     setIsProcessing(true);
     try {
-      const result = await factoryResetService.executeFactoryReset(cleanPin);
+      const result = await factoryResetService.executeFactoryReset(cleanPin, {
+        onResetStarted: () => {
+          setRecoveryState('pending');
+        },
+        onResetFailed: (err: string) => {
+          setRecoveryError(err);
+          setRecoveryState('failed');
+        },
+      });
       showToast(result.message, 'success');
       onSuccess();
       handleClose();

@@ -9,8 +9,9 @@ import { discountService } from '../services/discountService';
 import { settingsService } from '../services/settingsService';
 import { subscribePosPublic, leavePosPublic, subscribePosBooth, leavePosBooth, onEchoConnected } from '../services/echo';
 import { mockStore, StorageStatusInfo } from '../mock/store';
-import { saveSecondaryCache, getRestoreJournal } from '../mock/persistence/storage';
+import { saveSecondaryCache, getRestoreJournal, getFactoryResetJournal, FACTORY_RESET_JOURNAL_KEY } from '../mock/persistence/storage';
 import { backupService, RecoveryResult } from '../services/backupService';
+import { factoryResetService } from '../services/factoryResetService';
 
 import { usePOSToast } from './pos/usePOSToast';
 import { usePOSAuth } from './pos/usePOSAuth';
@@ -159,6 +160,13 @@ interface POSContextType {
   uploadPrinterLogo: (file: File) => Promise<string>;
   deletePrinterLogo: () => Promise<void>;
   refreshMedia?: () => Promise<void>;
+
+  // Fail-Closed Recovery Gate (S3 & S4)
+  recoveryState: 'pending' | 'ready' | 'failed';
+  recoveryError: string | null;
+  setRecoveryState: React.Dispatch<React.SetStateAction<'pending' | 'ready' | 'failed'>>;
+  setRecoveryError: React.Dispatch<React.SetStateAction<string | null>>;
+  retryRecovery: () => Promise<void>;
 }
 
 const POSContext = createContext<POSContextType | undefined>(undefined);
@@ -167,51 +175,128 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Domain 1: Toast
   const { toast, showToast } = usePOSToast();
 
-  // ===== FAIL-CLOSED BOOTSTRAP GATE (S3 R1) =====
+  // ===== FAIL-CLOSED BOOTSTRAP GATE (S3 & S4) =====
   // Recovery MUST complete before any child component mounts or uses data.
   // States: 'pending' = recovery in progress, 'ready' = safe to proceed, 'failed' = permanent lock
   type RecoveryState = 'pending' | 'ready' | 'failed';
   const [recoveryState, setRecoveryState] = useState<RecoveryState>(() =>
-    getRestoreJournal() ? 'pending' : 'ready'
+    (getRestoreJournal() || getFactoryResetJournal()) ? 'pending' : 'ready'
   );
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const recoveryRanRef = useRef(false);
+
+  // Multi-tab sync: jika tab lain sedang reset pabrik, kunci tab ini
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === FACTORY_RESET_JOURNAL_KEY && e.newValue) {
+        mockStore.setWriteLock(true);
+        setRecoveryState('pending');
+      }
+    };
+    window.addEventListener('storage', handleStorageEvent);
+    return () => window.removeEventListener('storage', handleStorageEvent);
+  }, []);
+
+  const retryRecovery = useCallback(async () => {
+    const resetJ = getFactoryResetJournal();
+    const restoreJ = getRestoreJournal();
+    if (resetJ) {
+      setRecoveryState('pending');
+      try {
+        const res = await factoryResetService.recoverInterruptedReset();
+        if (res.success) {
+          showToast(res.message, 'success');
+          setRecoveryState('ready');
+          setTimeout(() => {
+            window.location.href = '/';
+          }, 500);
+        }
+      } catch (err: any) {
+        setRecoveryError(err?.message || 'Gagal mengulang pemulihan reset pabrik.');
+        setRecoveryState('failed');
+      }
+    } else if (restoreJ) {
+      setRecoveryState('pending');
+      try {
+        const rec = await backupService.checkAndRecoverInterruptedRestore();
+        if (rec.success) {
+          showToast('Pemulihan cadangan berhasil diselesaikan.', 'success');
+          setRecoveryState('ready');
+        } else {
+          setRecoveryError(rec.error || 'Pemulihan cadangan gagal.');
+          setRecoveryState('failed');
+        }
+      } catch (err: any) {
+        setRecoveryError(err?.message || 'Gagal mengulang pemulihan cadangan.');
+        setRecoveryState('failed');
+      }
+    }
+  }, [showToast]);
 
   useEffect(() => {
     if (recoveryRanRef.current) return;
     recoveryRanRef.current = true;
 
-    if (!getRestoreJournal()) {
+    const restoreJ = getRestoreJournal();
+    const factoryJ = getFactoryResetJournal();
+
+    if (!restoreJ && !factoryJ) {
       setRecoveryState('ready');
       return;
     }
 
-    console.warn('[POSContext] Jurnal pemulihan terdeteksi. Menjalankan crash recovery sebelum bootstrap...');
-
-    backupService
-      .checkAndRecoverInterruptedRestore()
-      .then((rec: RecoveryResult) => {
-        if (rec.recovered) {
-          if (rec.success) {
-            showToast(rec.message || 'Pemulihan cadangan yang terputus berhasil dinormalisasi.', 'info');
-            setRecoveryState('ready');
-          } else {
-            // ROLLBACK_FAILED — permanent lock
-            const errMsg = rec.error || 'Kegagalan kritis pemulihan cadangan. Sistem terkunci.';
-            setRecoveryError(errMsg);
-            setRecoveryState('failed');
-          }
-        } else {
-          // No recovery needed (journal was stale or empty)
-          setRecoveryState('ready');
-        }
-      })
-      .catch((err: any) => {
-        console.error('[POSContext] Error fatal saat recovery startup:', err);
-        const errMsg = err?.message || 'Kesalahan tidak diketahui saat pemulihan darurat.';
-        setRecoveryError(errMsg);
+    if (factoryJ) {
+      console.warn('[POSContext] Jurnal reset pabrik S4 terdeteksi. Menjalankan recovery sebelum bootstrap...');
+      if (factoryJ.stage === 'STAGE_FAILED') {
+        setRecoveryError(factoryJ.error || 'Reset pabrik sebelumnya gagal dan sistem terkunci.');
         setRecoveryState('failed');
-      });
+      } else {
+        factoryResetService
+          .recoverInterruptedReset()
+          .then((res) => {
+            if (res.success) {
+              showToast(res.message || 'Pemulihan reset pabrik berhasil.', 'info');
+              setRecoveryState('ready');
+            } else {
+              setRecoveryError(res.message);
+              setRecoveryState('failed');
+            }
+          })
+          .catch((err: any) => {
+            console.error('[POSContext] Error fatal saat recovery reset pabrik:', err);
+            setRecoveryError(err?.message || 'Kesalahan tidak diketahui saat pemulihan darurat.');
+            setRecoveryState('failed');
+          });
+      }
+      return;
+    }
+
+    if (restoreJ) {
+      console.warn('[POSContext] Jurnal pemulihan S3 terdeteksi. Menjalankan crash recovery sebelum bootstrap...');
+      backupService
+        .checkAndRecoverInterruptedRestore()
+        .then((rec: RecoveryResult) => {
+          if (rec.recovered) {
+            if (rec.success) {
+              showToast(rec.message || 'Pemulihan cadangan yang terputus berhasil dinormalisasi.', 'info');
+              setRecoveryState('ready');
+            } else {
+              const errMsg = rec.error || 'Kegagalan kritis pemulihan cadangan. Sistem terkunci.';
+              setRecoveryError(errMsg);
+              setRecoveryState('failed');
+            }
+          } else {
+            setRecoveryState('ready');
+          }
+        })
+        .catch((err: any) => {
+          console.error('[POSContext] Error fatal saat recovery startup:', err);
+          const errMsg = err?.message || 'Kesalahan tidak diketahui saat pemulihan darurat.';
+          setRecoveryError(errMsg);
+          setRecoveryState('failed');
+        });
+    }
   }, [showToast]);
 
   // Domain 0: Storage Integrity Tracking
@@ -979,6 +1064,23 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           <p style={{ fontSize: '0.75rem', color: '#a1a1aa', marginTop: '1rem' }}>
             Muat ulang halaman atau hubungi administrator untuk bantuan.
           </p>
+          <button
+            type="button"
+            onClick={retryRecovery}
+            style={{
+              marginTop: '1.25rem',
+              padding: '0.625rem 1.25rem',
+              borderRadius: '8px',
+              backgroundColor: '#e11d48',
+              color: '#fff',
+              fontWeight: 700,
+              fontSize: '0.8125rem',
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            Coba Lagi Pemulihan
+          </button>
         </div>
       </div>
     );
@@ -1105,6 +1207,11 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         uploadPrinterLogo,
         deletePrinterLogo,
         refreshMedia,
+        recoveryState,
+        recoveryError,
+        setRecoveryState,
+        setRecoveryError,
+        retryRecovery,
       }}
     >
       {children}

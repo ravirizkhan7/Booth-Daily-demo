@@ -6,7 +6,9 @@ import {
   StorageDriver,
   DEMO_STORAGE_KEY,
 } from '../persistence/storage';
-import { User, Shift } from '../../types';
+import { User, Shift, Settings, Order } from '../../types';
+import { getReceiptHtml, getTestReceiptHtml } from '../../services/receiptPrint';
+import * as XLSX from 'xlsx';
 
 class NodeMemoryStorageDriver implements StorageDriver {
   public store: Record<string, string> = {};
@@ -1276,6 +1278,365 @@ export async function runSecurityRegressionTests(): Promise<{
       errors.push(`Test 20 Gagal: ${err.message}`);
     }
 
+    // =========================================================================
+    // TEST 21: P1 — Stored XSS Mitigation on Receipt Print
+    // =========================================================================
+    console.log('\n--- PENGUJIAN P1 (Stored XSS Mitigation on Receipt Print) ---');
+    try {
+      const mockSettings = {
+        store_name: 'Booth <script>alert("store")</script>',
+        tagline: 'Tagline <img src=x onerror=alert(1)>',
+        address: 'Jl. "Batu" & <Api>',
+        phone: '0812<phone>',
+        receipt_header: 'Header <script>alert("hdr")</script>',
+        receipt_footer: 'Footer & <b>Bold</b>',
+        receipt_paper_size: '58mm' as const,
+      };
+
+      const testHtml = getTestReceiptHtml(mockSettings as any);
+      assert(!testHtml.includes('<script>'), 'P1.1: getTestReceiptHtml tidak boleh mengandung tag script mentah');
+      assert(!testHtml.includes('<img src=x onerror=alert(1)>'), 'P1.1: getTestReceiptHtml tidak boleh mengandung img onerror mentah');
+      assert(testHtml.includes('&lt;script&gt;alert(&quot;store&quot;)&lt;/script&gt;'), 'P1.1: Nama toko harus di-escape');
+      assert(testHtml.includes('&lt;img src=x onerror=alert(1)&gt;'), 'P1.1: Tagline harus di-escape');
+      assert(testHtml.includes('&quot;Batu&quot; &amp; &lt;Api&gt;'), 'P1.1: Alamat dengan tanda kutip dan ampersand harus di-escape');
+
+      const mockOrder: any = {
+        id: 'ord-test-xss',
+        order_number: 'ORD-"<test>&"',
+        created_at: new Date().toISOString(),
+        created_by_name: '<b onmouseover=alert(1)>Kasir</b>',
+        customer_name: '<script>alert("cust")</script>',
+        order_type: 'take_away',
+        subtotal: 30000,
+        discount: 5000,
+        discount_id: 'disc-1',
+        tax: 1250,
+        total_amount: 26250,
+        items: [
+          {
+            id: 'item-1',
+            product_name: 'Kopi <img src=x onerror=alert("xss")>',
+            price: 30000,
+            qty: 1,
+            notes: 'Extra "manis" & <dingin>',
+          },
+        ],
+        payment: {
+          method: 'cash <script>',
+          status: 'paid',
+          amount_paid: 50000,
+          change: 23750,
+        },
+      };
+
+      // Test dengan logo javascript: URI (harus dinetralisir)
+      const xssLogoHtml = getReceiptHtml(mockOrder, mockSettings as any, 'javascript:alert("xss")');
+      assert(!xssLogoHtml.includes('javascript:alert'), 'P1.2: URI javascript: pada logo harus diblokir');
+      assert(!xssLogoHtml.includes('<script>alert("cust")</script>'), 'P1.2: customer_name mentah tidak boleh muncul');
+      assert(!xssLogoHtml.includes('<img src=x onerror=alert("xss")>'), 'P1.2: product_name mentah tidak boleh muncul');
+      assert(!xssLogoHtml.includes('<b onmouseover=alert(1)>'), 'P1.2: created_by_name mentah tidak boleh muncul');
+      assert(xssLogoHtml.includes('&lt;script&gt;alert(&quot;cust&quot;)&lt;/script&gt;'), 'P1.2: customer_name ter-escape dengan benar');
+      assert(xssLogoHtml.includes('&lt;img src=x onerror=alert(&quot;xss&quot;)&gt;'), 'P1.2: product_name ter-escape dengan benar');
+      assert(xssLogoHtml.includes('Extra &quot;manis&quot; &amp; &lt;dingin&gt;'), 'P1.2: Catatan item ter-escape dengan benar');
+      assert(xssLogoHtml.includes('CASH &lt;SCRIPT&gt;') || xssLogoHtml.includes('cash &lt;script&gt;'), 'P1.2: Metode pembayaran ter-escape');
+
+      // Test logo aman (data:image/...) tetap dirender
+      const safeLogoHtml = getReceiptHtml(mockOrder, mockSettings as any, 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=');
+      assert(safeLogoHtml.includes('data:image/png;base64,'), 'P1.3: Logo dengan data: URL aman tetap dirender');
+
+      // Test layout lebar 58mm vs 80mm
+      const html58 = getReceiptHtml(mockOrder, { ...mockSettings, receipt_paper_size: '58mm' } as any);
+      const html80 = getReceiptHtml(mockOrder, { ...mockSettings, receipt_paper_size: '80mm' } as any);
+      assert(html58.includes('max-width: 48mm'), 'P1.4: Layout 58mm membatasi lebar cetak 48mm');
+      assert(html80.includes('max-width: 78mm'), 'P1.4: Layout 80mm membatasi lebar cetak 78mm');
+
+      console.log('✓ Test 21 PASS: Seluruh nilai dinamis pada struk ter-escape dan payload XSS dinetralisir 100%');
+    } catch (err: any) {
+      errors.push(`Test 21 Gagal: ${err.message}`);
+    }
+
+    // =========================================================================
+    // TEST 22: P2 — Formula Injection Verification in XLSX Export
+    // =========================================================================
+    console.log('\n--- PENGUJIAN P2 (Excel Formula Injection Verification) ---');
+    try {
+      const testRows: XLSX.CellObject[][] = [
+        [
+          { v: '=1+1', t: 's' },
+          { v: '@SUM(1,2)', t: 's' },
+          { v: '+12345', t: 's' },
+          { v: '-12345', t: 's' },
+          { v: "=cmd|' /C calc'!A0", t: 's' },
+          { v: -25000, t: 'n' },
+          { v: 0, t: 'n' },
+          { v: 75000, t: 'n' },
+        ],
+      ];
+
+      const ws: XLSX.WorkSheet = {};
+      testRows[0].forEach((cell, c) => {
+        ws[XLSX.utils.encode_cell({ r: 0, c })] = cell;
+      });
+      ws['!ref'] = 'A1:H1';
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'TestSheet');
+
+      // Tulis workbook ke buffer XLSX
+      const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      // Baca kembali buffer
+      const readWb = XLSX.read(buf, { type: 'buffer' });
+      const readWs = readWb.Sheets['TestSheet'];
+
+      // Verifikasi sel teks berbahaya
+      assert(readWs['A1'].t === 's', 'P2.1: Sel =1+1 harus bertipe string (s), bukan formula (f)');
+      assert(readWs['A1'].v === '=1+1', 'P2.1: Sel =1+1 bernilai string literal');
+      assert(readWs['A1'].f === undefined, 'P2.1: Sel =1+1 tidak boleh memiliki formula (.f)');
+
+      assert(readWs['B1'].t === 's', 'P2.2: Sel @SUM(1,2) harus bertipe string (s)');
+      assert(readWs['B1'].v === '@SUM(1,2)', 'P2.2: Sel @SUM bernilai string literal');
+      assert(readWs['B1'].f === undefined, 'P2.2: Sel @SUM tidak memiliki formula (.f)');
+
+      assert(readWs['C1'].t === 's', 'P2.3: Sel +12345 harus bertipe string (s)');
+      assert(readWs['C1'].v === '+12345', 'P2.3: Sel +12345 bernilai string literal');
+
+      assert(readWs['D1'].t === 's', 'P2.4: Sel -12345 harus bertipe string (s)');
+      assert(readWs['D1'].v === '-12345', 'P2.4: Sel -12345 bernilai string literal');
+
+      assert(readWs['E1'].t === 's', 'P2.5: Sel =cmd harus bertipe string (s)');
+      assert(readWs['E1'].f === undefined, 'P2.5: Sel =cmd tidak boleh dieksekusi sebagai formula');
+
+      // Verifikasi nilai numerik sah tetap bertipe angka
+      assert(readWs['F1'].t === 'n', 'P2.6: Angka negatif -25000 harus bertipe number (n)');
+      assert(readWs['F1'].v === -25000, 'P2.6: Nilai angka negatif -25000 tetap utuh');
+
+      assert(readWs['G1'].t === 'n', 'P2.7: Nilai 0 bertipe number (n)');
+      assert(readWs['G1'].v === 0, 'P2.7: Nilai 0 tetap 0');
+
+      assert(readWs['H1'].t === 'n', 'P2.8: Nilai 75000 bertipe number (n)');
+      assert(readWs['H1'].v === 75000, 'P2.8: Nilai 75000 tetap 75000');
+
+      console.log('✓ Test 22 PASS: Format XLSX menyimpan teks dengan t="str" murni tanpa formula (.f), dan angka negatif tetap bertipe numerik');
+    } catch (err: any) {
+      errors.push(`Test 22 Gagal: ${err.message}`);
+    }
+
+    // =========================================================================
+    // TEST 23: P3 — Catalog & Master Data Store Authorization
+    // =========================================================================
+    console.log('\n--- PENGUJIAN P3 (Catalog & Master Data Store Authorization) ---');
+    try {
+      const p3Store = new MockStore();
+      const initialProductsCount = p3Store.getProducts().length;
+      const initialCategoriesCount = p3Store.getCategories().length;
+      const initialStocksCount = p3Store.getStocks().length;
+      const initialRecipesCount = p3Store.getRecipes().length;
+
+      // 1. Tanpa sesi -> SELURUH mutasi katalog harus ditolak
+      sessionManager.clearSession();
+
+      const expectAuthRejection = (fn: () => void, name: string) => {
+        let threw = false;
+        try {
+          fn();
+        } catch (e: any) {
+          threw = true;
+          assert(e.message?.includes('Sesi login Owner aktif diperlukan') ||
+                 e.message?.includes('Hanya Owner yang berwenang'),
+                 `${name} harus melempar pesan penolakan otorisasi: ${e.message}`);
+        }
+        assert(threw, `${name} wajib ditolak saat tidak memiliki izin`);
+      };
+
+      expectAuthRejection(() => p3Store.addProduct({ category_id: 'cat-1', name: 'NoAuth', price: 10000, cost_price: 5000, image_url: '', description: '', is_active: true, is_favorite: false }), 'addProduct (no session)');
+      expectAuthRejection(() => p3Store.updateProduct('prd-americano', { name: 'NoAuth Americano' }), 'updateProduct (no session)');
+      expectAuthRejection(() => p3Store.deleteProduct('prd-americano'), 'deleteProduct (no session)');
+      expectAuthRejection(() => p3Store.toggleProductFavorite('prd-americano'), 'toggleProductFavorite (no session)');
+      expectAuthRejection(() => p3Store.addCategory({ name: 'NoAuth Cat', icon_name: 'Coffee' }), 'addCategory (no session)');
+      expectAuthRejection(() => p3Store.updateCategory('cat-1', { name: 'NoAuth Cat' }), 'updateCategory (no session)');
+      expectAuthRejection(() => p3Store.deleteCategory('cat-1'), 'deleteCategory (no session)');
+      expectAuthRejection(() => p3Store.addStock({ name: 'NoAuth Stock', current_amount: 10, min_amount: 1, unit: 'Gram', cost_per_unit: 100 }), 'addStock (no session)');
+      expectAuthRejection(() => p3Store.deleteStock('stk-coffee-beans'), 'deleteStock (no session)');
+      expectAuthRejection(() => p3Store.adjustStock('stk-coffee-beans', 5, 'NoAuth adjust'), 'adjustStock (no session)');
+      expectAuthRejection(() => p3Store.addRecipe({ product_id: 'prd-americano', prep_time_minutes: 5, image_url: '', description: '', ingredients: [], steps: [] }), 'addRecipe (no session)');
+      expectAuthRejection(() => p3Store.updateRecipe('rcp-americano', { prep_time_minutes: 10 }), 'updateRecipe (no session)');
+      expectAuthRejection(() => p3Store.deleteRecipe('rcp-americano'), 'deleteRecipe (no session)');
+
+      // 2. Dengan sesi Kasir (usr-karyawan-01) -> SELURUH mutasi katalog harus ditolak
+      sessionManager.setSession({ userId: employeeUser!.id, token: 'kasir_token', loggedInAt: new Date().toISOString() });
+      expectAuthRejection(() => p3Store.addProduct({ category_id: 'cat-1', name: 'KasirProd', price: 10000, cost_price: 5000, image_url: '', description: '', is_active: true, is_favorite: false }), 'addProduct (kasir session)');
+      expectAuthRejection(() => p3Store.updateProduct('prd-americano', { name: 'KasirProd' }), 'updateProduct (kasir session)');
+      expectAuthRejection(() => p3Store.deleteProduct('prd-americano'), 'deleteProduct (kasir session)');
+      expectAuthRejection(() => p3Store.toggleProductFavorite('prd-americano'), 'toggleProductFavorite (kasir session)');
+      expectAuthRejection(() => p3Store.addCategory({ name: 'Kasir Cat', icon_name: 'Coffee' }), 'addCategory (kasir session)');
+      expectAuthRejection(() => p3Store.updateCategory('cat-1', { name: 'Kasir Cat' }), 'updateCategory (kasir session)');
+      expectAuthRejection(() => p3Store.deleteCategory('cat-1'), 'deleteCategory (kasir session)');
+      expectAuthRejection(() => p3Store.addStock({ name: 'Kasir Stock', current_amount: 10, min_amount: 1, unit: 'Gram', cost_per_unit: 100 }), 'addStock (kasir session)');
+      expectAuthRejection(() => p3Store.deleteStock('stk-coffee-beans'), 'deleteStock (kasir session)');
+      expectAuthRejection(() => p3Store.adjustStock('stk-coffee-beans', 5, 'Kasir adjust'), 'adjustStock (kasir session)');
+      expectAuthRejection(() => p3Store.addRecipe({ product_id: 'prd-americano', prep_time_minutes: 5, image_url: '', description: '', ingredients: [], steps: [] }), 'addRecipe (kasir session)');
+      expectAuthRejection(() => p3Store.updateRecipe('rcp-americano', { prep_time_minutes: 10 }), 'updateRecipe (kasir session)');
+      expectAuthRejection(() => p3Store.deleteRecipe('rcp-americano'), 'deleteRecipe (kasir session)');
+
+      // 3. Pastikan Zero-Mutation: tidak ada data yang berubah di RAM
+      assert(p3Store.getProducts().length === initialProductsCount, 'P3: Jumlah produk tidak berubah saat mutasi ditolak');
+      assert(p3Store.getCategories().length === initialCategoriesCount, 'P3: Jumlah kategori tidak berubah saat mutasi ditolak');
+      assert(p3Store.getStocks().length === initialStocksCount, 'P3: Jumlah stok tidak berubah saat mutasi ditolak');
+      assert(p3Store.getRecipes().length === initialRecipesCount, 'P3: Jumlah resep tidak berubah saat mutasi ditolak');
+
+      // 4. Dengan sesi Owner sah (usr-owner-01) -> mutasi diizinkan
+      sessionManager.setSession({ userId: ownerUser!.id, token: 'owner_token', loggedInAt: new Date().toISOString() });
+      const addedProduct = p3Store.addProduct({
+        category_id: 'cat-1',
+        name: 'Produk Owner Sah',
+        price: 25000,
+        cost_price: 10000,
+        image_url: '',
+        description: 'Testing owner permission',
+        is_active: true,
+        is_favorite: false,
+      });
+      assert(addedProduct.name === 'Produk Owner Sah', 'P3: Owner berhasil menambahkan produk');
+      assert(p3Store.getProducts().length === initialProductsCount + 1, 'P3: Produk bertambah di RAM');
+
+      // Clean up produk uji
+      p3Store.deleteProduct(addedProduct.id);
+      assert(p3Store.getProducts().length === initialProductsCount, 'P3: Owner berhasil menghapus produk uji');
+
+      sessionManager.clearSession();
+      console.log('✓ Test 23 PASS: Otorisasi store layer konsisten menolak kasir/tamu dan mengizinkan owner dengan rollback atomik');
+    } catch (err: any) {
+      errors.push(`Test 23 Gagal: ${err.message}`);
+    }
+
+    // =========================================================================
+    // TEST 24: P4 — Store-Level Price & Cost Price Validation
+    // =========================================================================
+    console.log('\n--- PENGUJIAN P4 (Store-Level Price & Cost Price Validation) ---');
+    try {
+      const p4Store = new MockStore();
+      sessionManager.setSession({ userId: ownerUser!.id, token: 'owner_token', loggedInAt: new Date().toISOString() });
+      const initialProductsCount = p4Store.getProducts().length;
+
+      const expectPriceValidationError = (fn: () => void, expectedSubstr: string, label: string) => {
+        let threw = false;
+        try {
+          fn();
+        } catch (e: any) {
+          threw = true;
+          assert(e.message?.includes(expectedSubstr), `${label} harus mengandung "${expectedSubstr}": ${e.message}`);
+        }
+        assert(threw, `${label} wajib melempar error validasi`);
+      };
+
+      // Harga negatif
+      expectPriceValidationError(() => p4Store.addProduct({
+        category_id: 'cat-1', name: 'Neg Price', price: -5000, cost_price: 1000, image_url: '', description: '', is_active: true, is_favorite: false
+      }), 'Harga jual tidak boleh bernilai negatif', 'Harga jual negatif');
+
+      // HPP negatif
+      expectPriceValidationError(() => p4Store.addProduct({
+        category_id: 'cat-1', name: 'Neg Cost', price: 15000, cost_price: -2000, image_url: '', description: '', is_active: true, is_favorite: false
+      }), 'Harga modal (cost price) tidak boleh bernilai negatif', 'Cost price negatif');
+
+      // NaN
+      expectPriceValidationError(() => p4Store.addProduct({
+        category_id: 'cat-1', name: 'NaN Price', price: NaN, cost_price: 1000, image_url: '', description: '', is_active: true, is_favorite: false
+      }), 'harus berupa angka numerik yang valid', 'Harga jual NaN');
+
+      // Infinity
+      expectPriceValidationError(() => p4Store.addProduct({
+        category_id: 'cat-1', name: 'Inf Cost', price: 15000, cost_price: Infinity, image_url: '', description: '', is_active: true, is_favorite: false
+      }), 'harus berupa angka numerik yang valid', 'Cost price Infinity');
+
+      // String non-numerik
+      expectPriceValidationError(() => p4Store.addProduct({
+        category_id: 'cat-1', name: 'String Price', price: 'bukan_angka' as any, cost_price: 1000, image_url: '', description: '', is_active: true, is_favorite: false
+      }), 'harus berupa angka numerik yang valid', 'Harga jual string invalid');
+
+      // Update produk ke harga negatif
+      expectPriceValidationError(() => p4Store.updateProduct('prd-americano', { price: -1000 }), 'Harga jual tidak boleh bernilai negatif', 'Update harga negatif');
+      expectPriceValidationError(() => p4Store.updateProduct('prd-americano', { cost_price: -500 }), 'Harga modal (cost price) tidak boleh bernilai negatif', 'Update cost price negatif');
+
+      // Zero-mutation check
+      assert(p4Store.getProducts().length === initialProductsCount, 'P4: Tidak ada produk yang masuk saat validasi gagal');
+      const americano = p4Store.getProductById('prd-americano');
+      assert(americano?.price === 18000, 'P4: Harga Americano tetap 18000 (tidak termutasi parsial)');
+
+      // Nilai 0 diizinkan
+      const zeroProduct = p4Store.addProduct({
+        category_id: 'cat-1', name: 'Free Sample', price: 0, cost_price: 0, image_url: '', description: '', is_active: true, is_favorite: false
+      });
+      assert(zeroProduct.price === 0 && zeroProduct.cost_price === 0, 'P4: Harga 0 dan cost_price 0 diizinkan');
+      p4Store.deleteProduct(zeroProduct.id);
+
+      // String angka valid diizinkan dan diparse ke number
+      const stringNumberProduct = p4Store.addProduct({
+        category_id: 'cat-1', name: 'String Number', price: '25000' as any, cost_price: '12000' as any, image_url: '', description: '', is_active: true, is_favorite: false
+      });
+      assert(typeof stringNumberProduct.price === 'number' && stringNumberProduct.price === 25000, 'P4: String angka valid diparse menjadi number murni');
+      assert(typeof stringNumberProduct.cost_price === 'number' && stringNumberProduct.cost_price === 12000, 'P4: String angka valid diparse menjadi number murni');
+      p4Store.deleteProduct(stringNumberProduct.id);
+
+      sessionManager.clearSession();
+      console.log('✓ Test 24 PASS: Validasi harga dan HPP di store boundary menolak nilai negatif, NaN, Infinity tanpa mutasi');
+    } catch (err: any) {
+      errors.push(`Test 24 Gagal: ${err.message}`);
+    }
+
+    // =========================================================================
+    // TEST 25: P5 — Duplicate Category Name Prevention
+    // =========================================================================
+    console.log('\n--- PENGUJIAN P5 (Duplicate Category Name Prevention) ---');
+    try {
+      const p5Store = new MockStore();
+      sessionManager.setSession({ userId: ownerUser!.id, token: 'owner_token', loggedInAt: new Date().toISOString() });
+      const initialCatCount = p5Store.getCategories().length;
+
+      const expectCategoryDuplicateError = (fn: () => void, label: string) => {
+        let threw = false;
+        try {
+          fn();
+        } catch (e: any) {
+          threw = true;
+          assert(e.message?.includes('sudah terdaftar') || e.message?.includes('sudah ada'),
+                 `${label} harus melempar pesan duplikat kategori: ${e.message}`);
+        }
+        assert(threw, `${label} wajib menolak duplikasi nama kategori`);
+      };
+
+      // 1. Tambah kategori baru unik
+      const catA = p5Store.addCategory({ name: 'Minuman Tradisional', icon_name: 'Coffee' });
+      assert(catA.name === 'Minuman Tradisional', 'P5: Kategori baru berhasil ditambahkan');
+      assert(p5Store.getCategories().length === initialCatCount + 1, 'P5: Jumlah kategori bertambah 1');
+
+      // 2. Duplikat identik
+      expectCategoryDuplicateError(() => p5Store.addCategory({ name: 'Minuman Tradisional', icon_name: 'Coffee' }), 'Duplikat identik');
+
+      // 3. Duplikat beda kapitalisasi (case-insensitive)
+      expectCategoryDuplicateError(() => p5Store.addCategory({ name: 'minuman tradisional', icon_name: 'Coffee' }), 'Duplikat lowercase');
+      expectCategoryDuplicateError(() => p5Store.addCategory({ name: 'MINUMAN TRADISIONAL', icon_name: 'Coffee' }), 'Duplikat UPPERCASE');
+
+      // 4. Duplikat dengan spasi ekstra di awal/akhir
+      expectCategoryDuplicateError(() => p5Store.addCategory({ name: '  Minuman Tradisional  ', icon_name: 'Coffee' }), 'Duplikat dengan spasi ekstra');
+
+      // 5. Update kategori tanpa mengubah nama (self-update) harus DIIZINKAN
+      const selfUpdated = p5Store.updateCategory(catA.id, { name: 'Minuman Tradisional' });
+      assert(selfUpdated.name === 'Minuman Tradisional', 'P5: Update tanpa ubah nama diizinkan');
+
+      // 6. Update kategori ke nama kategori lain yang sudah ada harus DITOLAK
+      expectCategoryDuplicateError(() => p5Store.updateCategory(catA.id, { name: 'Kopi' }), 'Update menjadi nama kategori lain');
+
+      // 7. Bersihkan kategori uji
+      p5Store.deleteCategory(catA.id);
+      assert(p5Store.getCategories().length === initialCatCount, 'P5: Jumlah kategori kembali ke semula');
+
+      sessionManager.clearSession();
+      console.log('✓ Test 25 PASS: Penolakan nama kategori duplikat case-insensitive dan whitespace-trimmed berfungsi sempurna');
+    } catch (err: any) {
+      errors.push(`Test 25 Gagal: ${err.message}`);
+    }
+
   } finally {
     // Pulihkan storage driver dan session awal
     resetStorageDriver();
@@ -1288,7 +1649,7 @@ export async function runSecurityRegressionTests(): Promise<{
 
   console.log('\n===============================================================');
   if (errors.length === 0) {
-    console.log('   SELURUH REGRESI KEAMANAN DEFECT-SEC-01 & 02 LULUS (100% PASS)');
+    console.log('   SELURUH REGRESI KEAMANAN DEFECT-SEC-01, 02 & REMEDIASI P1-P5 LULUS (100% PASS)');
     console.log('===============================================================\n');
     return { pass: true, errors: [] };
   } else {

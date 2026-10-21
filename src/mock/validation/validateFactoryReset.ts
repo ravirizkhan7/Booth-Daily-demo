@@ -14,6 +14,11 @@ import {
   NodeMemoryStorageDriver,
   saveRestoreJournal,
   clearRestoreJournal,
+  saveFactoryResetJournal,
+  getFactoryResetJournal,
+  clearFactoryResetJournal,
+  FACTORY_RESET_JOURNAL_KEY,
+  savePersistedSnapshot,
   DEMO_STORAGE_KEY,
   isAppStorageKey,
 } from '../persistence/storage';
@@ -306,8 +311,10 @@ async function runFactoryResetValidation() {
     }
     assert(threwOnMediaFailure, 'Test 10: Tidak boleh mengembalikan status sukses palsu saat media gagal dibersihkan');
 
-    // Kembalikan method asli
+    // Kembalikan method asli dan bersihkan jurnal pengujian Test 10
     mediaStorage.clearAllMedia = originalClearAllMedia;
+    clearFactoryResetJournal();
+    mockStore.setWriteLock(false);
 
     // ----------------------------------------------------
     // TEST 11: IS_APP_STORAGE_KEY ALLOWLIST ACCURACY
@@ -320,6 +327,179 @@ async function runFactoryResetValidation() {
     assert(!isAppStorageKey('app_settings_other'), 'Test 11: key asing ditolak');
 
     // ----------------------------------------------------
+    // TEST 12: TIKET RESEED TEROTORISASI & SEKALI PAKAI
+    // ----------------------------------------------------
+    console.log('\n--- TEST 12: Tiket Reseed Terotorisasi & Sekali Pakai ---');
+    sessionManager.clearSession();
+    await userService.login('owner@boothdaily.com', 'demo123');
+    const auth12 = await userService.verifyPin('1234');
+    assert(Boolean(auth12?.token), 'Test 12: Tiket verifikasi PIN berhasil diperoleh');
+
+    const reseedToken = mockStore.issueReseedTicket(auth12!.token!);
+    assert(
+      typeof reseedToken === 'string' && reseedToken.startsWith('rst_usr-owner-01_'),
+      'Test 12: Format tiket reseed terikat pada Owner aktif',
+      reseedToken
+    );
+
+    // Coba gunakan tiket PIN yang sama dua kali -> wajib ditolak
+    let threwReusedPinToken = false;
+    try {
+      mockStore.issueReseedTicket(auth12!.token!);
+    } catch (err: any) {
+      threwReusedPinToken = true;
+      assert(
+        err.message.includes('kedaluwarsa atau sudah digunakan'),
+        'Test 12: Tiket verifikasi PIN tidak dapat digunakan ulang',
+        err.message
+      );
+    }
+    assert(threwReusedPinToken, 'Test 12: Single-use tiket PIN terbukti aman');
+
+    // ----------------------------------------------------
+    // TEST 13: STAGE-GATE JURNAL PADA reseedStore()
+    // ----------------------------------------------------
+    console.log('\n--- TEST 13: Stage-Gate Jurnal pada reseedStore() ---');
+    clearFactoryResetJournal();
+
+    let threwWithoutJournal = false;
+    try {
+      mockStore.reseedStore({ type: 'OWNER_TICKET', ticket: reseedToken });
+    } catch (err: any) {
+      threwWithoutJournal = true;
+      assert(
+        err.message.includes('Reseed ditolak') && err.message.includes('NONE'),
+        'Test 13: reseedStore menolak pemanggilan tanpa jurnal aktif',
+        err.message
+      );
+    }
+    assert(threwWithoutJournal, 'Test 13: reseedStore dilindungi jurnal');
+
+    // Simulasikan jurnal pada stage 1 (belum storage cleared)
+    saveFactoryResetJournal({
+      id: 'journal-stage1-test',
+      startedAt: new Date().toISOString(),
+      stage: 'STAGE_1_INITIALIZED',
+    });
+
+    let threwOnStage1 = false;
+    try {
+      mockStore.reseedStore({ type: 'OWNER_TICKET', ticket: reseedToken });
+    } catch (err: any) {
+      threwOnStage1 = true;
+      assert(
+        err.message.includes('STAGE_3_STORAGE_CLEARED'),
+        'Test 13: reseedStore menolak jika belum STAGE_3_STORAGE_CLEARED',
+        err.message
+      );
+    }
+    assert(threwOnStage1, 'Test 13: Stage-gate STAGE_3_STORAGE_CLEARED terbukti');
+    clearFactoryResetJournal();
+
+    // ----------------------------------------------------
+    // TEST 14: MITIGASI TULIS LINTAS-TAB DI savePersistedSnapshot()
+    // ----------------------------------------------------
+    console.log('\n--- TEST 14: Mitigasi Tulis Lintas-Tab di savePersistedSnapshot() ---');
+    saveFactoryResetJournal({
+      id: 'journal-crosstab-test',
+      startedAt: new Date().toISOString(),
+      stage: 'STAGE_1_INITIALIZED',
+    });
+
+    // Penulisan bisnis biasa (tanpa allowReseedPersist) wajib ditolak
+    const normalWriteResult = savePersistedSnapshot(mockStore.getSnapshot());
+    assert(
+      normalWriteResult.success === false && normalWriteResult.errorCode === 'WRITE_LOCKED',
+      'Test 14: Penulisan bisnis ditolak saat jurnal reset aktif di storage'
+    );
+
+    // Penulisan reseed resmi (dengan allowReseedPersist) diizinkan
+    const reseedWriteResult = savePersistedSnapshot(mockStore.getSnapshot(), {
+      allowReseedPersist: true,
+    });
+    assert(
+      reseedWriteResult.success === true,
+      'Test 14: Penulisan reseed dengan flag allowReseedPersist diizinkan'
+    );
+    clearFactoryResetJournal();
+
+    // ----------------------------------------------------
+    // TEST 15: POST-COMMITMENT FAILURE MENGUNCI KE STAGE_FAILED & isWriteLocked
+    // ----------------------------------------------------
+    console.log('\n--- TEST 15: Post-Commitment Failure Mengunci ke STAGE_FAILED & UI Gate ---');
+    sessionManager.clearSession();
+    await userService.login('owner@boothdaily.com', 'demo123');
+
+    let startedCallbackCalled = false;
+    let failedCallbackCalled = false;
+    let failedCallbackError = '';
+
+    mediaStorage.clearAllMedia = async () => {
+      throw new Error('Simulasi IndexedDB Crash Pasca-Komitmen');
+    };
+
+    let threwPostCommit = false;
+    try {
+      await factoryResetService.executeFactoryReset('1234', {
+        onResetStarted: () => {
+          startedCallbackCalled = true;
+        },
+        onResetFailed: (err) => {
+          failedCallbackCalled = true;
+          failedCallbackError = err;
+        },
+      });
+    } catch (err: any) {
+      threwPostCommit = true;
+    }
+    assert(threwPostCommit, 'Test 15: Exception pasca-komitmen dilempar ke caller');
+    assert(startedCallbackCalled, 'Test 15: onResetStarted callback dipanggil saat commit point');
+    assert(failedCallbackCalled, 'Test 15: onResetFailed callback dipanggil saat kegagalan');
+    assert(
+      failedCallbackError.includes('Simulasi IndexedDB Crash Pasca-Komitmen'),
+      'Test 15: Pesan error kegagalan diteruskan ke UI Gate'
+    );
+
+    const failedJournal = getFactoryResetJournal();
+    assert(
+      failedJournal?.stage === 'STAGE_FAILED' && failedJournal?.failedAtStage === 'STAGE_1_INITIALIZED',
+      'Test 15: Jurnal tercatat berstatus STAGE_FAILED dengan failedAtStage'
+    );
+    assert(
+      mockStore.getIsWriteLocked() === true,
+      'Test 15: Write-lock tetap aktif (fail-closed) setelah kegagalan'
+    );
+
+    mediaStorage.clearAllMedia = originalClearAllMedia;
+
+    // ----------------------------------------------------
+    // TEST 16: IDEMPOTENT CRASH RECOVERY VIA recoverInterruptedReset()
+    // ----------------------------------------------------
+    console.log('\n--- TEST 16: Idempotent Crash Recovery via recoverInterruptedReset() ---');
+    const recoverResult = await factoryResetService.recoverInterruptedReset();
+    assert(recoverResult.success === true, 'Test 16: recoverInterruptedReset berhasil tuntas');
+    assert(getFactoryResetJournal() === null, 'Test 16: Jurnal dibersihkan setelah pemulihan sukses');
+    assert(mockStore.getIsWriteLocked() === false, 'Test 16: Write-lock dibuka setelah pemulihan tuntas');
+
+    // ----------------------------------------------------
+    // TEST 17: VERIFIKASI AKHIR STATE LENGKAP
+    // ----------------------------------------------------
+    console.log('\n--- TEST 17: Verifikasi Akhir State Lengkap ---');
+    assert(mockStore.getProducts().length === 15, 'Test 17: Tepat 15 produk seed bawaan');
+    assert(mockStore.getCategories().length === 6, 'Test 17: Tepat 6 kategori seed bawaan');
+    assert(mockStore.getStocks().length === 13, 'Test 17: Tepat 13 stok seed bawaan');
+    assert(mockStore.getRecipes().length === 15, 'Test 17: Tepat 15 resep produk seed bawaan');
+    const finalIngCount = mockStore.getRecipes().reduce(
+      (sum, r) => sum + (Array.isArray(r.ingredients) ? r.ingredients.length : 0),
+      0
+    );
+    assert(finalIngCount === 30, 'Test 17: Tepat 30 relasi bahan resep terverifikasi');
+    assert(mockStore.getSettings().store_name === 'BOOTH DAILY', 'Test 17: Nama toko kembali "BOOTH DAILY"');
+    assert(sessionManager.getSession() === null, 'Test 17: Sesi pengguna telah dinonaktifkan (null)');
+    const finalMedia = await mediaStorage.getAllMedia();
+    assert(finalMedia.appLogo === null && finalMedia.printerLogo === null, 'Test 17: Seluruh media branding null');
+
+    // ----------------------------------------------------
     // HASIL AKHIR
     // ----------------------------------------------------
     console.log('\n====================================================');
@@ -328,7 +508,7 @@ async function runFactoryResetValidation() {
       for (const e of errors) console.error(`  - ${e}`);
       process.exit(1);
     } else {
-      console.log('🎉 SEMUA PENGUJIAN S4 FACTORY RESET BERHASIL 100%! [11/11 PASS]');
+      console.log('🎉 SEMUA PENGUJIAN S4 FACTORY RESET BERHASIL 100%! [17/17 PASS]');
       console.log('====================================================\n');
     }
   } catch (globalErr: any) {

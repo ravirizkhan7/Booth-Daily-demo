@@ -243,6 +243,36 @@ body {
 };
 
 /**
+ * Sanitize untrusted text input against HTML injection (XSS).
+ * Encodes special characters: &, <, >, ", and '.
+ */
+export const escapeHtml = (val: unknown): string => {
+  if (val === null || val === undefined) return '';
+  return String(val)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+/**
+ * Validate that a printer logo image URL is a safe URI (data:image/ or relative/http).
+ * Blocks javascript:, vbscript:, and malicious schemes.
+ */
+export const isSafeLogoUrl = (url?: string | null): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  return (
+    trimmed.startsWith('data:image/') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://')
+  );
+};
+
+/**
  * Generate simplified thermal test receipt HTML.
  * Purely tests printer layout and connection, NOT a transaction simulation.
  */
@@ -251,7 +281,8 @@ export const getTestReceiptHtml = (
   printerLogo?: string | null
 ): string => {
   const paperSize: ReceiptPaperSize = settings.receipt_paper_size === '58mm' ? '58mm' : '80mm';
-  const storeName = settings.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
+  const rawStoreName = settings.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
+  const storeName = escapeHtml(rawStoreName);
   const now = new Date();
   const dateFormatted = `${now.toLocaleDateString('id-ID', {
     day: '2-digit',
@@ -259,8 +290,8 @@ export const getTestReceiptHtml = (
     year: 'numeric',
   })}, ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`;
 
-  const logoHtml = printerLogo
-    ? `<div class="store-logo"><img src="${printerLogo}" alt="${storeName}" /></div>`
+  const logoHtml = printerLogo && isSafeLogoUrl(printerLogo)
+    ? `<div class="store-logo"><img src="${escapeHtml(printerLogo)}" alt="${storeName}" /></div>`
     : '';
 
   const testReceipt = `
@@ -271,9 +302,9 @@ export const getTestReceiptHtml = (
         ${logoHtml}
         <div class="store-name">${storeName}</div>
         <div class="staff-badge">TEST PRINT THERMAL</div>
-        ${settings.tagline ? `<div class="tagline">${settings.tagline}</div>` : ''}
-        ${settings.address ? `<div class="address-line">${settings.address}</div>` : ''}
-        ${settings.phone ? `<div class="address-line">Telp: ${settings.phone}</div>` : ''}
+        ${settings.tagline ? `<div class="tagline">${escapeHtml(settings.tagline)}</div>` : ''}
+        ${settings.address ? `<div class="address-line">${escapeHtml(settings.address)}</div>` : ''}
+        ${settings.phone ? `<div class="address-line">Telp: ${escapeHtml(settings.phone)}</div>` : ''}
       </div>
 
       <!-- Test Information -->
@@ -297,7 +328,7 @@ export const getTestReceiptHtml = (
         settings.receipt_header
           ? `
             <div class="border-dashed-b text-center">
-              <div class="value-dim">${settings.receipt_header}</div>
+              <div class="value-dim">${escapeHtml(settings.receipt_header)}</div>
             </div>
           `
           : ''
@@ -313,7 +344,7 @@ export const getTestReceiptHtml = (
         settings.receipt_footer
           ? `
             <div class="receipt-footer">
-              <div class="receipt-footer-bold">${settings.receipt_footer}</div>
+              <div class="receipt-footer-bold">${escapeHtml(settings.receipt_footer)}</div>
             </div>
           `
           : ''
@@ -359,9 +390,10 @@ export const getReceiptHtml = (
   printerLogo?: string | null
 ): string => {
   const paperSize: ReceiptPaperSize = settings.receipt_paper_size === '58mm' ? '58mm' : '80mm';
-  const storeName = settings.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
-  const logoHtml = printerLogo
-    ? `<div class="store-logo"><img src="${printerLogo}" alt="${storeName}" /></div>`
+  const rawStoreName = settings.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
+  const storeName = escapeHtml(rawStoreName);
+  const logoHtml = printerLogo && isSafeLogoUrl(printerLogo)
+    ? `<div class="store-logo"><img src="${escapeHtml(printerLogo)}" alt="${storeName}" /></div>`
     : '';
 
   const orderType =
@@ -370,7 +402,7 @@ export const getReceiptHtml = (
       : 'TAKE AWAY';
 
   const custName = order.customer_name
-    ? ` (${order.customer_name})`
+    ? ` (${escapeHtml(order.customer_name)})`
     : '';
 
   const isRefunded = order.payment?.status === 'refunded';
@@ -378,7 +410,7 @@ export const getReceiptHtml = (
   // Snapshot fields — read directly from backend order, NEVER recalculate
   const subtotal     = order.subtotal     ?? 0;
   const discount     = order.discount     ?? 0;
-  const discountName = order.discount_name ?? null;
+  const discountName = order.discount_name ? escapeHtml(order.discount_name) : null;
   const tax          = order.tax          ?? 0;
   const totalAmount  = order.total_amount ?? 0;
 
@@ -395,12 +427,12 @@ export const getReceiptHtml = (
       (item) => `
         <div class="item-block">
           <div class="item-main">
-            <span class="item-name-col">${item.qty}x ${item.product_name}</span>
+            <span class="item-name-col">${item.qty}x ${escapeHtml(item.product_name)}</span>
             <span class="item-price-col">${formatRupiah(item.subtotal)}</span>
           </div>
           ${
             item.notes
-              ? `<div class="item-notes">Catatan: ${item.notes}</div>`
+              ? `<div class="item-notes">Catatan: ${escapeHtml(item.notes)}</div>`
               : ''
           }
         </div>
@@ -413,11 +445,11 @@ export const getReceiptHtml = (
       (item) => `
         <div class="item-block">
           <div class="item-main">
-            <span class="item-name-col">${item.qty}x ${item.product_name}</span>
+            <span class="item-name-col">${item.qty}x ${escapeHtml(item.product_name)}</span>
           </div>
           ${
             item.notes
-              ? `<div class="item-notes font-bold" style="color: #1c1917;">Catatan: ${item.notes}</div>`
+              ? `<div class="item-notes font-bold" style="color: #1c1917;">Catatan: ${escapeHtml(item.notes)}</div>`
               : ''
           }
         </div>
@@ -432,16 +464,16 @@ export const getReceiptHtml = (
       <div class="store-header">
         ${logoHtml}
         <div class="store-name">${storeName}</div>
-        ${settings.tagline ? `<div class="tagline">${settings.tagline}</div>` : ''}
-        ${settings.address ? `<div class="address-line">${settings.address}</div>` : ''}
-        ${settings.phone ? `<div class="address-line">Telp: ${settings.phone}</div>` : ''}
+        ${settings.tagline ? `<div class="tagline">${escapeHtml(settings.tagline)}</div>` : ''}
+        ${settings.address ? `<div class="address-line">${escapeHtml(settings.address)}</div>` : ''}
+        ${settings.phone ? `<div class="address-line">Telp: ${escapeHtml(settings.phone)}</div>` : ''}
       </div>
 
       <!-- Order Info -->
       <div class="border-dashed-b">
         <div class="flex-row">
           <span class="label-dim">No:</span>
-          <span class="font-bold">${order.order_number}</span>
+          <span class="font-bold">${escapeHtml(order.order_number)}</span>
         </div>
         <div class="flex-row">
           <span class="label-dim">Waktu:</span>
@@ -449,7 +481,7 @@ export const getReceiptHtml = (
         </div>
         <div class="flex-row">
           <span class="label-dim">Kasir:</span>
-          <span>${order.created_by_name}</span>
+          <span>${escapeHtml(order.created_by_name)}</span>
         </div>
         <div class="flex-row">
           <span class="label-dim">Tipe Pesanan:</span>
@@ -492,7 +524,7 @@ export const getReceiptHtml = (
         </div>
         <div class="flex-row value-dim">
           <span>Metode Bayar:</span>
-          <span class="font-bold uppercase">${order.payment?.method?.toUpperCase() || '-'}</span>
+          <span class="font-bold uppercase">${escapeHtml(order.payment?.method?.toUpperCase() || '-')}</span>
         </div>
         <div class="flex-row value-dim">
           <span>Diterima:</span>
@@ -509,8 +541,8 @@ export const getReceiptHtml = (
         settings.receipt_header || settings.receipt_footer
           ? `
             <div class="receipt-footer">
-              ${settings.receipt_header ? `<div>${settings.receipt_header}</div>` : ''}
-              ${settings.receipt_footer ? `<div class="receipt-footer-bold">${settings.receipt_footer}</div>` : ''}
+              ${settings.receipt_header ? `<div>${escapeHtml(settings.receipt_header)}</div>` : ''}
+              ${settings.receipt_footer ? `<div class="receipt-footer-bold">${escapeHtml(settings.receipt_footer)}</div>` : ''}
             </div>
           `
           : ''
@@ -527,16 +559,16 @@ export const getReceiptHtml = (
         ${logoHtml}
         <div class="store-name">${storeName}</div>
         <div class="staff-badge">SALINAN STAFF</div>
-        ${settings.tagline ? `<div class="tagline">${settings.tagline}</div>` : ''}
-        ${settings.address ? `<div class="address-line">${settings.address}</div>` : ''}
-        ${settings.phone ? `<div class="address-line">Telp: ${settings.phone}</div>` : ''}
+        ${settings.tagline ? `<div class="tagline">${escapeHtml(settings.tagline)}</div>` : ''}
+        ${settings.address ? `<div class="address-line">${escapeHtml(settings.address)}</div>` : ''}
+        ${settings.phone ? `<div class="address-line">Telp: ${escapeHtml(settings.phone)}</div>` : ''}
       </div>
 
       <!-- Order Info -->
       <div class="border-dashed-b">
         <div class="flex-row">
           <span class="label-dim">No:</span>
-          <span class="font-bold">${order.order_number}</span>
+          <span class="font-bold">${escapeHtml(order.order_number)}</span>
         </div>
         <div class="flex-row">
           <span class="label-dim">Waktu:</span>
@@ -544,7 +576,7 @@ export const getReceiptHtml = (
         </div>
         <div class="flex-row">
           <span class="label-dim">Kasir:</span>
-          <span>${order.created_by_name}</span>
+          <span>${escapeHtml(order.created_by_name)}</span>
         </div>
         <div class="flex-row">
           <span class="label-dim">Tipe Pesanan:</span>
@@ -573,7 +605,7 @@ export const getReceiptHtml = (
     <html>
     <head>
       <meta charset="UTF-8">
-      <title>Receipt_${order.order_number}</title>
+      <title>Receipt_${escapeHtml(order.order_number)}</title>
       <style>
         ${getReceiptCSS(paperSize)}
       </style>

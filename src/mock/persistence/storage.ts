@@ -303,7 +303,7 @@ export function loadPersistedSnapshot(): StorageLoadResult {
  */
 export function savePersistedSnapshot(
   state: MockStoreState,
-  options?: { isWriteLocked?: boolean }
+  options?: { isWriteLocked?: boolean; allowReseedPersist?: boolean }
 ): StorageSaveResult {
   if (options?.isWriteLocked) {
     return {
@@ -332,6 +332,18 @@ export function savePersistedSnapshot(
       errorCode: 'SERIALIZATION_FAILED',
       error: err?.message || 'Gagal melakukan serialisasi data snapshot.',
     };
+  }
+
+  // Multi-tab best-effort mitigation: periksa apakah ada jurnal reset pabrik aktif sebelum penulisan snapshot bisnis
+  if (!options?.allowReseedPersist) {
+    const activeJournal = storage.getItem(FACTORY_RESET_JOURNAL_KEY);
+    if (activeJournal) {
+      return {
+        success: false,
+        errorCode: 'WRITE_LOCKED',
+        error: 'Penulisan diblokir: Sistem sedang dalam proses reset data pabrik.',
+      };
+    }
   }
 
   try {
@@ -424,13 +436,23 @@ export function clearAppStorageAllowlist(options?: { removeJournal?: boolean }):
   }
 
   try {
+    const failedKeys: string[] = [];
     // 1. Hapus key terdaftar pada allowlist
     for (const key of APP_ALLOWLIST_STORAGE_KEYS) {
       try {
         storage.removeItem(key);
       } catch (keyErr) {
         console.warn(`[MockStorage] Gagal menghapus key allowlist (${key}):`, keyErr);
+        failedKeys.push(key);
       }
+    }
+
+    if (failedKeys.length > 0) {
+      return {
+        success: false,
+        errorCode: 'WRITE_FAILED',
+        error: `Gagal membersihkan key penyimpanan allowlist: ${failedKeys.join(', ')}`,
+      };
     }
 
     // 2. Jika diizinkan secara eksplisit, hapus restore journal
@@ -565,6 +587,80 @@ export function clearRestoreJournal(): void {
   const storage = getActiveStorage();
   if (!storage) return;
   storage.removeItem(RESTORE_JOURNAL_KEY);
+}
+
+// ----------------------------------------------------
+// ATOMIC FACTORY RESET RECOVERY JOURNAL (S4)
+// ----------------------------------------------------
+export const FACTORY_RESET_JOURNAL_KEY = 'boothdaily_factory_reset_journal';
+
+export type FactoryResetStage =
+  | 'STAGE_1_INITIALIZED'
+  | 'STAGE_2_INDEXEDDB_CLEARED'
+  | 'STAGE_3_STORAGE_CLEARED'
+  | 'STAGE_4_STORE_RESEEDED'
+  | 'STAGE_5_VERIFIED'
+  | 'STAGE_FAILED';
+
+export interface FactoryResetJournal {
+  id: string;
+  startedAt: string;
+  stage: FactoryResetStage;
+  failedAtStage?: FactoryResetStage;
+  error?: string;
+  retryCount?: number;
+}
+
+/**
+ * Menyimpan jurnal Factory Reset ke storage secara aman.
+ */
+export function saveFactoryResetJournal(journal: FactoryResetJournal): StorageSaveResult {
+  const storage = getActiveStorage();
+  if (!storage) {
+    return {
+      success: false,
+      errorCode: 'STORAGE_UNAVAILABLE',
+      error: 'Penyimpanan lokal tidak tersedia untuk mencatat jurnal reset pabrik.',
+    };
+  }
+  try {
+    storage.setItem(FACTORY_RESET_JOURNAL_KEY, JSON.stringify(journal));
+    return { success: true };
+  } catch (err: any) {
+    console.error('[MockStorage] Gagal menyimpan jurnal reset pabrik:', err);
+    return {
+      success: false,
+      errorCode: 'WRITE_FAILED',
+      error: err?.message || 'Gagal menyimpan jurnal reset pabrik.',
+    };
+  }
+}
+
+/**
+ * Membaca jurnal Factory Reset aktif dari storage.
+ */
+export function getFactoryResetJournal(): FactoryResetJournal | null {
+  const storage = getActiveStorage();
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(FACTORY_RESET_JOURNAL_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Menghapus jurnal Factory Reset setelah seluruh verifikasi berhasil.
+ */
+export function clearFactoryResetJournal(): void {
+  const storage = getActiveStorage();
+  if (!storage) return;
+  try {
+    storage.removeItem(FACTORY_RESET_JOURNAL_KEY);
+  } catch (err) {
+    console.warn('[MockStorage] Gagal menghapus jurnal reset pabrik:', err);
+  }
 }
 
 

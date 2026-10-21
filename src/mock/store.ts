@@ -38,11 +38,16 @@ import {
   clearPersistedSnapshot,
   getRestoreJournal,
   clearRestoreJournal,
+  getFactoryResetJournal,
   StorageLoadStatus,
   StorageLoadResult,
   StorageSaveResult,
   StorageSaveErrorCode,
 } from './persistence/storage';
+
+export type ReseedAuth =
+  | { type: 'OWNER_TICKET'; ticket: string }
+  | { type: 'RECOVERY_JOURNAL'; journalId: string };
 
 export interface StorageStatusInfo {
   status: StorageLoadStatus;
@@ -66,6 +71,25 @@ function deepClone<T>(obj: T): T {
     return structuredClone(obj);
   }
   return JSON.parse(JSON.stringify(obj));
+}
+
+/**
+ * Validates price or cost price at the store boundary.
+ * Rejects negative values, NaN, and Infinity.
+ * Allows zero and valid numeric strings (parsed to numbers).
+ */
+function parseAndValidatePrice(val: unknown, fieldName: string): number {
+  if (val === null || val === undefined || val === '') {
+    throw new Error(`${fieldName} wajib diisi`);
+  }
+  const num = typeof val === 'number' ? val : Number(val);
+  if (typeof num !== 'number' || isNaN(num) || !isFinite(num)) {
+    throw new Error(`${fieldName} harus berupa angka numerik yang valid (bukan NaN atau Infinity)`);
+  }
+  if (num < 0) {
+    throw new Error(`${fieldName} tidak boleh bernilai negatif`);
+  }
+  return num;
 }
 
 export interface PinVerificationTicket {
@@ -102,6 +126,11 @@ export class MockStore {
   private storageListeners: ((info: StorageStatusInfo) => void)[] = [];
   private pinVerificationTickets = new Map<string, PinVerificationTicket>();
   private usedTicketIds = new Set<string>();
+  private activeReseedTicket: {
+    ticketId: string;
+    ownerId: string;
+    expiresAt: number;
+  } | null = null;
   private needsNormalizedPersist: boolean = false;
   private hasPendingMigrationPersist: boolean = false;
 
@@ -167,6 +196,45 @@ export class MockStore {
   public getPinVerificationTicket(ticketId: string): PinVerificationTicket | undefined {
     const t = this.pinVerificationTickets.get(ticketId);
     return t ? deepClone(t) : undefined;
+  }
+
+  /**
+   * Menerbitkan tiket reseed pabrik internal sekali-pakai (TTL 60 detik).
+   * Hanya dapat dipanggil oleh Owner aktif dengan tiket verifikasi PIN yang sah.
+   */
+  public issueReseedTicket(pinVerificationToken: string): string {
+    const owner = this.assertActiveOwnerSession('menerbitkan tiket reseed pabrik');
+    if (!pinVerificationToken || typeof pinVerificationToken !== 'string') {
+      throw new Error('Tiket verifikasi PIN sah diperlukan untuk otorisasi reseed pabrik.');
+    }
+
+    const pinTicket = this.pinVerificationTickets.get(pinVerificationToken);
+    if (!pinTicket) {
+      throw new Error('Tiket verifikasi PIN tidak ditemukan.');
+    }
+
+    if (String(pinTicket.userId) !== String(owner.id)) {
+      throw new Error('Tiket verifikasi PIN tidak cocok dengan sesi Owner aktif.');
+    }
+
+    if (pinTicket.expiresAt <= Date.now() || pinTicket.used || this.usedTicketIds.has(pinVerificationToken)) {
+      throw new Error('Tiket verifikasi PIN telah kedaluwarsa atau sudah digunakan.');
+    }
+
+    // Konsumsi tiket PIN agar tidak dapat dipakai ulang
+    pinTicket.used = true;
+    this.usedTicketIds.add(pinVerificationToken);
+
+    const now = Date.now();
+    const randomSuffix = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+    const ticketId = `rst_${owner.id}_${now}_${randomSuffix}`;
+    this.activeReseedTicket = {
+      ticketId,
+      ownerId: owner.id,
+      expiresAt: now + 60 * 1000,
+    };
+
+    return ticketId;
   }
 
   /**
@@ -497,6 +565,24 @@ export class MockStore {
   }
 
   private initInitialState(): MockStoreState {
+    // Cek apakah terdapat jurnal reset pabrik S4 yang aktif atau terputus
+    const factoryJournal = getFactoryResetJournal();
+    if (factoryJournal) {
+      console.warn(`[MockStore] Terdeteksi jurnal reset pabrik pada stage "${factoryJournal.stage}". Mengunci penyimpanan dan memuat default seed ke RAM.`);
+      this.isWriteLocked = true;
+      this.storageStatus = 'SUCCESS';
+      this.lastSaveResult = {
+        success: false,
+        errorCode: 'WRITE_LOCKED',
+        error: `Sistem terkunci: Sedang dalam proses pemulihan reset pabrik (${factoryJournal.stage}).`,
+      };
+      this.needsNormalizedPersist = false;
+      this.hasPendingMigrationPersist = false;
+      const seed = this.createDefaultSeedState();
+      this.lastSavedState = deepClone(seed);
+      return seed;
+    }
+
     // Cek apakah terdapat jurnal pemulihan restore yang terputus di tengah jalan
     const pendingJournal = getRestoreJournal();
     if (pendingJournal) {
@@ -683,19 +769,61 @@ export class MockStore {
   }
 
   /**
-   * @internal Digunakan oleh factoryResetService setelah validasi otorisasi Owner
-   * dan pembersihan allowlist storage & media berhasil dilakukan.
+   * @internal Reseed store ke kondisi awal bawaan pabrik.
+   * Wajib memiliki otorisasi sah (OWNER_TICKET atau RECOVERY_JOURNAL)
+   * dan jurnal berada pada STAGE_3_STORAGE_CLEARED.
    */
-  public reseedStore(): void {
-    this.isWriteLocked = false;
+  public reseedStore(auth: ReseedAuth): void {
+    const journal = getFactoryResetJournal();
+    if (!journal || journal.stage !== 'STAGE_3_STORAGE_CLEARED') {
+      throw new Error(
+        `Reseed ditolak: Tahap jurnal tidak valid (${journal?.stage || 'NONE'}). Reseed hanya diizinkan pada STAGE_3_STORAGE_CLEARED.`
+      );
+    }
+
+    if (auth.type === 'OWNER_TICKET') {
+      if (!this.activeReseedTicket) {
+        throw new Error('Reseed ditolak: Tidak ada tiket reseed aktif.');
+      }
+      if (this.activeReseedTicket.ticketId !== auth.ticket) {
+        throw new Error('Reseed ditolak: Tiket reseed tidak cocok.');
+      }
+      if (this.activeReseedTicket.expiresAt <= Date.now()) {
+        this.activeReseedTicket = null;
+        throw new Error('Reseed ditolak: Tiket reseed telah kedaluwarsa.');
+      }
+      // Konsumsi tiket (sekali pakai)
+      this.activeReseedTicket = null;
+    } else if (auth.type === 'RECOVERY_JOURNAL') {
+      if (journal.id !== auth.journalId) {
+        throw new Error('Reseed ditolak: ID jurnal pemulihan tidak cocok.');
+      }
+    } else {
+      throw new Error('Reseed ditolak: Metode otorisasi tidak dikenal.');
+    }
+
     this.hasPendingMigrationPersist = false;
     this.needsNormalizedPersist = false;
     this.storageStatus = 'SUCCESS';
     this.corruptionDetails = null;
     this.state = this.createDefaultSeedState();
+
+    // Simpan snapshot seed secara eksplisit
+    const saveResult = savePersistedSnapshot(this.state, {
+      isWriteLocked: false,
+      allowReseedPersist: true,
+    });
+    this.lastSaveResult = saveResult;
+
+    if (!saveResult.success) {
+      this.state = deepClone(this.lastSavedState);
+      throw new Error(
+        `[DataIntegrityError] Gagal menyimpan snapshot seed bawaan: ${saveResult.error || saveResult.errorCode}`
+      );
+    }
+
     this.lastSavedState = deepClone(this.state);
-    this.lastSaveResult = { success: true };
-    this.persist();
+    // Write-lock tetap aktif hingga verifikasi dan cleanup jurnal selesai di service
     this.notifyStorageListeners();
   }
 
@@ -1026,48 +1154,105 @@ export class MockStore {
 
   public addCategory(catData: Omit<Category, 'id' | 'slug'> & { slug?: string; id?: string }): Category {
     this.ensureMigrationPersisted();
-    const slug = catData.slug || catData.name.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
-    const newCategory: Category = {
-      ...catData,
-      id: catData.id || `cat-${Date.now()}`,
-      slug,
-      icon_name: catData.icon_name || 'Tag',
-    };
-    this.state.categories.push(newCategory);
-    this.persist();
-    return deepClone(newCategory);
+    this.assertActiveOwnerSession('menambahkan kategori produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const rawName = catData.name !== undefined && catData.name !== null ? String(catData.name) : '';
+      const cleanName = rawName.trim();
+      if (!cleanName) {
+        throw new Error('Nama kategori wajib diisi dan tidak boleh hanya berisi spasi');
+      }
+      const lowerName = cleanName.toLowerCase();
+      const isDuplicate = this.state.categories.some(
+        c => (c.name || '').trim().toLowerCase() === lowerName
+      );
+      if (isDuplicate) {
+        throw new Error(`Nama kategori "${cleanName}" sudah terdaftar. Gunakan nama lain.`);
+      }
+
+      const slug = catData.slug || cleanName.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+      const newCategory: Category = {
+        ...catData,
+        id: catData.id || `cat-${Date.now()}`,
+        name: cleanName,
+        slug,
+        icon_name: catData.icon_name || 'Tag',
+      };
+      this.state.categories.push(newCategory);
+      this.persist();
+      return deepClone(newCategory);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   public updateCategory(id: string, catData: Partial<Category>): Category {
     this.ensureMigrationPersisted();
-    const index = this.state.categories.findIndex(c => String(c.id) === String(id));
-    if (index === -1) {
-      throw new Error(`Category with ID ${id} not found`);
+    this.assertActiveOwnerSession('memperbarui kategori produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.categories.findIndex(c => String(c.id) === String(id));
+      if (index === -1) {
+        throw new Error(`Category with ID ${id} not found`);
+      }
+
+      let updatedName = this.state.categories[index].name;
+      let updatedSlug = this.state.categories[index].slug;
+
+      if (catData.name !== undefined) {
+        const rawName = catData.name !== null ? String(catData.name) : '';
+        const cleanName = rawName.trim();
+        if (!cleanName) {
+          throw new Error('Nama kategori wajib diisi dan tidak boleh hanya berisi spasi');
+        }
+        const lowerName = cleanName.toLowerCase();
+        const isDuplicate = this.state.categories.some(
+          c => String(c.id) !== String(id) && (c.name || '').trim().toLowerCase() === lowerName
+        );
+        if (isDuplicate) {
+          throw new Error(`Nama kategori "${cleanName}" sudah terdaftar. Gunakan nama lain.`);
+        }
+        updatedName = cleanName;
+        if (!catData.slug) {
+          updatedSlug = cleanName.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+        }
+      }
+
+      const updated: Category = {
+        ...this.state.categories[index],
+        ...catData,
+        id: this.state.categories[index].id,
+        name: updatedName,
+        slug: catData.slug !== undefined ? catData.slug : updatedSlug,
+      };
+      this.state.categories[index] = updated;
+      this.persist();
+      return deepClone(updated);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const updated: Category = {
-      ...this.state.categories[index],
-      ...catData,
-      id: this.state.categories[index].id,
-    };
-    if (catData.name && !catData.slug) {
-      updated.slug = catData.name.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
-    }
-    this.state.categories[index] = updated;
-    this.persist();
-    return deepClone(updated);
   }
 
   public deleteCategory(id: string): boolean {
     this.ensureMigrationPersisted();
-    const isUsed = this.state.products.some(p => String(p.category_id) === String(id));
-    if (isUsed) {
-      throw new Error('Kategori tidak dapat dihapus karena masih digunakan oleh produk aktif');
+    this.assertActiveOwnerSession('menghapus kategori produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const isUsed = this.state.products.some(p => String(p.category_id) === String(id));
+      if (isUsed) {
+        throw new Error('Kategori tidak dapat dihapus karena masih digunakan oleh produk aktif');
+      }
+      const initialLen = this.state.categories.length;
+      this.state.categories = this.state.categories.filter(c => String(c.id) !== String(id));
+      const deleted = this.state.categories.length < initialLen;
+      if (deleted) this.persist();
+      return deleted;
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const initialLen = this.state.categories.length;
-    this.state.categories = this.state.categories.filter(c => String(c.id) !== String(id));
-    const deleted = this.state.categories.length < initialLen;
-    if (deleted) this.persist();
-    return deleted;
   }
 
   // ----------------------------------------------------
@@ -1084,69 +1269,131 @@ export class MockStore {
 
   public addProduct(productData: Omit<Product, 'id'> & { id?: string }): Product {
     this.ensureMigrationPersisted();
-    const catExists = this.state.categories.some(c => String(c.id) === String(productData.category_id));
-    if (!catExists) {
-      throw new Error('Kategori yang dipilih tidak valid');
-    }
-    const newProduct: Product = {
-      ...productData,
-      id: productData.id || `prd-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      category_id: String(productData.category_id),
-      price: Number(productData.price) || 0,
-      cost_price: Number(productData.cost_price) || 0,
-      is_active: productData.is_active ?? true,
-      is_favorite: productData.is_favorite ?? false,
-    };
-    this.state.products.push(newProduct);
-    this.persist();
-    return deepClone(newProduct);
-  }
-
-  public updateProduct(id: string, productData: Partial<Product>): Product {
-    this.ensureMigrationPersisted();
-    const index = this.state.products.findIndex(p => String(p.id) === String(id));
-    if (index === -1) {
-      throw new Error(`Product with ID ${id} not found`);
-    }
-    if (productData.category_id !== undefined) {
+    this.assertActiveOwnerSession('menambahkan produk baru');
+    const memorySnapshot = deepClone(this.state);
+    try {
       const catExists = this.state.categories.some(c => String(c.id) === String(productData.category_id));
       if (!catExists) {
         throw new Error('Kategori yang dipilih tidak valid');
       }
+
+      const rawName = productData.name !== undefined && productData.name !== null ? String(productData.name) : '';
+      const cleanName = rawName.trim();
+      if (!cleanName) {
+        throw new Error('Nama produk wajib diisi');
+      }
+
+      const validPrice = parseAndValidatePrice(productData.price, 'Harga jual');
+      const validCostPrice = productData.cost_price !== undefined
+        ? parseAndValidatePrice(productData.cost_price, 'Harga modal (cost price)')
+        : 0;
+
+      const newProduct: Product = {
+        ...productData,
+        id: productData.id || `prd-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        name: cleanName,
+        category_id: String(productData.category_id),
+        price: validPrice,
+        cost_price: validCostPrice,
+        is_active: productData.is_active ?? true,
+        is_favorite: productData.is_favorite ?? false,
+      };
+      this.state.products.push(newProduct);
+      this.persist();
+      return deepClone(newProduct);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const updated: Product = {
-      ...this.state.products[index],
-      ...productData,
-      id: this.state.products[index].id,
-      category_id: productData.category_id !== undefined ? String(productData.category_id) : this.state.products[index].category_id,
-      price: productData.price !== undefined ? Number(productData.price) : this.state.products[index].price,
-      cost_price: productData.cost_price !== undefined ? Number(productData.cost_price) : this.state.products[index].cost_price,
-    };
-    this.state.products[index] = updated;
-    this.persist();
-    return deepClone(updated);
+  }
+
+  public updateProduct(id: string, productData: Partial<Product>): Product {
+    this.ensureMigrationPersisted();
+    this.assertActiveOwnerSession('memperbarui produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.products.findIndex(p => String(p.id) === String(id));
+      if (index === -1) {
+        throw new Error(`Product with ID ${id} not found`);
+      }
+      if (productData.category_id !== undefined) {
+        const catExists = this.state.categories.some(c => String(c.id) === String(productData.category_id));
+        if (!catExists) {
+          throw new Error('Kategori yang dipilih tidak valid');
+        }
+      }
+
+      let updatedPrice = this.state.products[index].price;
+      if (productData.price !== undefined) {
+        updatedPrice = parseAndValidatePrice(productData.price, 'Harga jual');
+      }
+
+      let updatedCostPrice = this.state.products[index].cost_price;
+      if (productData.cost_price !== undefined) {
+        updatedCostPrice = parseAndValidatePrice(productData.cost_price, 'Harga modal (cost price)');
+      }
+
+      let updatedName = this.state.products[index].name;
+      if (productData.name !== undefined) {
+        const cleanName = String(productData.name).trim();
+        if (!cleanName) {
+          throw new Error('Nama produk tidak boleh kosong');
+        }
+        updatedName = cleanName;
+      }
+
+      const updated: Product = {
+        ...this.state.products[index],
+        ...productData,
+        id: this.state.products[index].id,
+        name: updatedName,
+        category_id: productData.category_id !== undefined ? String(productData.category_id) : this.state.products[index].category_id,
+        price: updatedPrice,
+        cost_price: updatedCostPrice,
+      };
+      this.state.products[index] = updated;
+      this.persist();
+      return deepClone(updated);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   public deleteProduct(id: string): boolean {
     this.ensureMigrationPersisted();
-    const initialLen = this.state.products.length;
-    this.state.products = this.state.products.filter(p => String(p.id) !== String(id));
-    this.state.recipes = this.state.recipes.filter(r => String(r.product_id) !== String(id));
-    const deleted = this.state.products.length < initialLen;
-    if (deleted) this.persist();
-    return deleted;
+    this.assertActiveOwnerSession('menghapus produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const initialLen = this.state.products.length;
+      this.state.products = this.state.products.filter(p => String(p.id) !== String(id));
+      this.state.recipes = this.state.recipes.filter(r => String(r.product_id) !== String(id));
+      const deleted = this.state.products.length < initialLen;
+      if (deleted) this.persist();
+      return deleted;
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   public toggleProductFavorite(id: string): { is_favorite: boolean } {
     this.ensureMigrationPersisted();
-    const index = this.state.products.findIndex(p => String(p.id) === String(id));
-    if (index === -1) {
-      throw new Error(`Product with ID ${id} not found`);
+    this.assertActiveOwnerSession('mengubah status favorit produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.products.findIndex(p => String(p.id) === String(id));
+      if (index === -1) {
+        throw new Error(`Product with ID ${id} not found`);
+      }
+      const current = Boolean(this.state.products[index].is_favorite);
+      this.state.products[index].is_favorite = !current;
+      this.persist();
+      return { is_favorite: !current };
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const current = Boolean(this.state.products[index].is_favorite);
-    this.state.products[index].is_favorite = !current;
-    this.persist();
-    return { is_favorite: !current };
   }
 
   // ----------------------------------------------------
@@ -1163,6 +1410,7 @@ export class MockStore {
 
   public addStock(stockData: Omit<Stock, 'id'> & { id?: string }): Stock {
     this.ensureMigrationPersisted();
+    this.assertActiveOwnerSession('menambahkan bahan baku baru');
     const memorySnapshot = deepClone(this.state);
     try {
       const costPerUnit = Number(stockData.cost_per_unit) || 0;
@@ -1367,17 +1615,24 @@ export class MockStore {
 
   public deleteStock(id: string): boolean {
     this.ensureMigrationPersisted();
-    const isUsedInRecipe = this.state.recipes.some(r =>
-      Array.isArray(r.ingredients) && r.ingredients.some(i => String(i.stock_id) === String(id))
-    );
-    if (isUsedInRecipe) {
-      throw new Error('Bahan baku tidak dapat dihapus karena masih digunakan dalam resep produk');
+    this.assertActiveOwnerSession('menghapus bahan baku');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const isUsedInRecipe = this.state.recipes.some(r =>
+        Array.isArray(r.ingredients) && r.ingredients.some(i => String(i.stock_id) === String(id))
+      );
+      if (isUsedInRecipe) {
+        throw new Error('Bahan baku tidak dapat dihapus karena masih digunakan dalam resep produk');
+      }
+      const initialLen = this.state.stocks.length;
+      this.state.stocks = this.state.stocks.filter(s => String(s.id) !== String(id));
+      const deleted = this.state.stocks.length < initialLen;
+      if (deleted) this.persist();
+      return deleted;
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const initialLen = this.state.stocks.length;
-    this.state.stocks = this.state.stocks.filter(s => String(s.id) !== String(id));
-    const deleted = this.state.stocks.length < initialLen;
-    if (deleted) this.persist();
-    return deleted;
   }
 
   public adjustStock(
@@ -1388,41 +1643,48 @@ export class MockStore {
     notes?: string
   ): Stock {
     this.ensureMigrationPersisted();
-    const index = this.state.stocks.findIndex(s => String(s.id) === String(stockId));
-    if (index === -1) {
-      throw new Error(`Stock with ID ${stockId} not found`);
+    const verifiedOwner = this.assertActiveOwnerSession('menyesuaikan stok bahan baku');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.stocks.findIndex(s => String(s.id) === String(stockId));
+      if (index === -1) {
+        throw new Error(`Stock with ID ${stockId} not found`);
+      }
+      const stock = this.state.stocks[index];
+      const prevAmount = stock.current_amount;
+      if (prevAmount + changeAmount < 0) {
+        throw new Error('Penyesuaian gagal: stok tidak boleh menjadi negatif');
+      }
+      const newAmount = Math.round((prevAmount + changeAmount) * 1000) / 1000;
+      stock.current_amount = newAmount;
+
+      const trimmedNotes = notes?.trim();
+      const reference = trimmedNotes ? `${reason} — ${trimmedNotes}` : reason;
+
+      // Record stock history entry with verified Owner name
+      const historyEntry: StockHistory = {
+        id: `sth-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        stock_id: stock.id,
+        stock_name: stock.name,
+        initial_amount: prevAmount,
+        change_amount: changeAmount,
+        final_amount: newAmount,
+        unit: stock.unit,
+        type: 'penyesuaian',
+        reason: reason,
+        notes: trimmedNotes,
+        reference: reference,
+        user_name: verifiedOwner.name || userName,
+        created_at: new Date().toISOString(),
+      };
+      this.state.stockHistories.unshift(historyEntry);
+
+      this.persist();
+      return deepClone(stock);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const stock = this.state.stocks[index];
-    const prevAmount = stock.current_amount;
-    if (prevAmount + changeAmount < 0) {
-      throw new Error('Penyesuaian gagal: stok tidak boleh menjadi negatif');
-    }
-    const newAmount = Math.round((prevAmount + changeAmount) * 1000) / 1000;
-    stock.current_amount = newAmount;
-
-    const trimmedNotes = notes?.trim();
-    const reference = trimmedNotes ? `${reason} — ${trimmedNotes}` : reason;
-
-    // Record stock history entry
-    const historyEntry: StockHistory = {
-      id: `sth-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      stock_id: stock.id,
-      stock_name: stock.name,
-      initial_amount: prevAmount,
-      change_amount: changeAmount,
-      final_amount: newAmount,
-      unit: stock.unit,
-      type: 'penyesuaian',
-      reason: reason,
-      notes: trimmedNotes,
-      reference: reference,
-      user_name: userName,
-      created_at: new Date().toISOString(),
-    };
-    this.state.stockHistories.unshift(historyEntry);
-
-    this.persist();
-    return deepClone(stock);
   }
 
   /**
@@ -1676,78 +1938,99 @@ export class MockStore {
 
   public addRecipe(recipeData: Omit<Recipe, 'id'> & { id?: string }): Recipe {
     this.ensureMigrationPersisted();
-    const product = this.state.products.find(p => String(p.id) === String(recipeData.product_id));
-    if (!product) {
-      throw new Error('Produk untuk resep tidak ditemukan');
-    }
-    const existing = this.state.recipes.find(
-      r => String(r.product_id) === String(recipeData.product_id)
-    );
-    if (existing) {
-      throw new Error(`Resep untuk produk "${product.name}" sudah ada`);
-    }
-
-    if (Array.isArray(recipeData.ingredients)) {
-      for (const ing of recipeData.ingredients) {
-        const stock = this.state.stocks.find(s => String(s.id) === String(ing.stock_id));
-        if (!stock) {
-          throw new Error(`Bahan baku dengan ID ${ing.stock_id} tidak ditemukan`);
-        }
-        if (Number(ing.amount) <= 0) {
-          throw new Error('Jumlah takaran bahan baku harus lebih besar dari 0');
-        }
-      }
-    }
-
-    const newRecipe: Recipe = {
-      ...recipeData,
-      id: recipeData.id || `rcp-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    };
-    this.state.recipes.push(newRecipe);
-    this.persist();
-    return deepClone(newRecipe);
-  }
-
-  public updateRecipe(id: string, recipeData: Partial<Recipe>): Recipe {
-    this.ensureMigrationPersisted();
-    const index = this.state.recipes.findIndex(r => String(r.id) === String(id));
-    if (index === -1) {
-      throw new Error(`Recipe with ID ${id} not found`);
-    }
-    if (recipeData.product_id !== undefined) {
+    this.assertActiveOwnerSession('menambahkan resep produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
       const product = this.state.products.find(p => String(p.id) === String(recipeData.product_id));
       if (!product) {
         throw new Error('Produk untuk resep tidak ditemukan');
       }
-    }
-    if (Array.isArray(recipeData.ingredients)) {
-      for (const ing of recipeData.ingredients) {
-        const stock = this.state.stocks.find(s => String(s.id) === String(ing.stock_id));
-        if (!stock) {
-          throw new Error(`Bahan baku dengan ID ${ing.stock_id} tidak ditemukan`);
-        }
-        if (Number(ing.amount) <= 0) {
-          throw new Error('Jumlah takaran bahan baku harus lebih besar dari 0');
+      const existing = this.state.recipes.find(
+        r => String(r.product_id) === String(recipeData.product_id)
+      );
+      if (existing) {
+        throw new Error(`Resep untuk produk "${product.name}" sudah ada`);
+      }
+
+      if (Array.isArray(recipeData.ingredients)) {
+        for (const ing of recipeData.ingredients) {
+          const stock = this.state.stocks.find(s => String(s.id) === String(ing.stock_id));
+          if (!stock) {
+            throw new Error(`Bahan baku dengan ID ${ing.stock_id} tidak ditemukan`);
+          }
+          if (Number(ing.amount) <= 0) {
+            throw new Error('Jumlah takaran bahan baku harus lebih besar dari 0');
+          }
         }
       }
+
+      const newRecipe: Recipe = {
+        ...recipeData,
+        id: recipeData.id || `rcp-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      };
+      this.state.recipes.push(newRecipe);
+      this.persist();
+      return deepClone(newRecipe);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
     }
-    const updated: Recipe = {
-      ...this.state.recipes[index],
-      ...recipeData,
-      id: this.state.recipes[index].id,
-    };
-    this.state.recipes[index] = updated;
-    this.persist();
-    return deepClone(updated);
+  }
+
+  public updateRecipe(id: string, recipeData: Partial<Recipe>): Recipe {
+    this.ensureMigrationPersisted();
+    this.assertActiveOwnerSession('memperbarui resep produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const index = this.state.recipes.findIndex(r => String(r.id) === String(id));
+      if (index === -1) {
+        throw new Error(`Recipe with ID ${id} not found`);
+      }
+      if (recipeData.product_id !== undefined) {
+        const product = this.state.products.find(p => String(p.id) === String(recipeData.product_id));
+        if (!product) {
+          throw new Error('Produk untuk resep tidak ditemukan');
+        }
+      }
+      if (Array.isArray(recipeData.ingredients)) {
+        for (const ing of recipeData.ingredients) {
+          const stock = this.state.stocks.find(s => String(s.id) === String(ing.stock_id));
+          if (!stock) {
+            throw new Error(`Bahan baku dengan ID ${ing.stock_id} tidak ditemukan`);
+          }
+          if (Number(ing.amount) <= 0) {
+            throw new Error('Jumlah takaran bahan baku harus lebih besar dari 0');
+          }
+        }
+      }
+      const updated: Recipe = {
+        ...this.state.recipes[index],
+        ...recipeData,
+        id: this.state.recipes[index].id,
+      };
+      this.state.recipes[index] = updated;
+      this.persist();
+      return deepClone(updated);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   public deleteRecipe(id: string): boolean {
     this.ensureMigrationPersisted();
-    const initialLen = this.state.recipes.length;
-    this.state.recipes = this.state.recipes.filter(r => String(r.id) !== String(id));
-    const deleted = this.state.recipes.length < initialLen;
-    if (deleted) this.persist();
-    return deleted;
+    this.assertActiveOwnerSession('menghapus resep produk');
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const initialLen = this.state.recipes.length;
+      this.state.recipes = this.state.recipes.filter(r => String(r.id) !== String(id));
+      const deleted = this.state.recipes.length < initialLen;
+      if (deleted) this.persist();
+      return deleted;
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   // ----------------------------------------------------
@@ -3183,3 +3466,7 @@ export class MockStore {
 
 // Export singleton instance
 export const mockStore = new MockStore();
+
+if (typeof window !== 'undefined') {
+  (window as any).mockStore = mockStore;
+}

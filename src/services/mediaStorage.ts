@@ -153,18 +153,16 @@ export const mediaStorage = {
     memoryMediaStore.clear();
     const idb = getIndexedDB();
     if (!idb) return;
-    try {
-      const db = await openDatabase();
-      return new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const req = store.clear();
-        req.onsuccess = () => resolve();
-        req.onerror = () => reject(req.error || new Error('Gagal membersihkan IndexedDB'));
-      });
-    } catch {
-      // ignore
-    }
+    const db = await openDatabase();
+    return new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error || new Error('Gagal membersihkan IndexedDB'));
+      tx.onabort = () => reject(tx.error || new Error('Transaksi IndexedDB dibatalkan'));
+      tx.onerror = () => reject(tx.error || new Error('Transaksi IndexedDB gagal'));
+    });
   },
 };
 
