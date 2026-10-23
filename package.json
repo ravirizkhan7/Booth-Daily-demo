@@ -29,7 +29,8 @@
     "validate:hpp-phase4": "tsx src/mock/validation/validateHPPPhase4.ts",
     "validate:qris": "tsx src/mock/validation/validateQRISReconciliation.ts",
     "validate:shift-filters": "tsx src/mock/validation/validateShiftDateFilters.ts",
-    "validate:report-users": "tsx src/mock/validation/validateReportUserFilter.ts"
+    "validate:report-users": "tsx src/mock/validation/validateReportUserFilter.ts",
+    "validate:vip-settings": "tsx src/mock/validation/validateVIPAndReportSettings.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

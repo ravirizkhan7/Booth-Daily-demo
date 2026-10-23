@@ -39,6 +39,11 @@ export const SettingsPage: React.FC = () => {
 
   const [formData, setFormData] = useState<StoreSettings>({
     ...settings,
+    report_signer_name: settings?.report_signer_name || '',
+    report_city: settings?.report_city || '',
+    vip_discount_percentage: settings?.vip_discount_percentage ?? 0,
+    vip_tax_percentage: settings?.vip_tax_percentage ?? null,
+    vip_room_service_charge_percentage: settings?.vip_room_service_charge_percentage ?? 0,
     operational_day_cutoff_time: settings?.operational_day_cutoff_time || '04:00',
     receipt_paper_size: settings?.receipt_paper_size === '58mm' ? '58mm' : '80mm',
   });
@@ -91,6 +96,11 @@ export const SettingsPage: React.FC = () => {
     if (!isDirty) {
       setFormData({
         ...settings,
+        report_signer_name: settings?.report_signer_name || '',
+        report_city: settings?.report_city || '',
+        vip_discount_percentage: settings?.vip_discount_percentage ?? 0,
+        vip_tax_percentage: settings?.vip_tax_percentage ?? null,
+        vip_room_service_charge_percentage: settings?.vip_room_service_charge_percentage ?? 0,
         operational_day_cutoff_time: settings?.operational_day_cutoff_time || '04:00',
         receipt_paper_size: settings?.receipt_paper_size === '58mm' ? '58mm' : '80mm',
       });
@@ -108,6 +118,28 @@ export const SettingsPage: React.FC = () => {
 
     if (isNaN(taxNum) || taxNum < 0 || taxNum > 100) {
       showToast('Tarif pajak harus antara 0% sampai 100%', 'error');
+      return;
+    }
+
+    const vipDiscountNum = Number(formData.vip_discount_percentage ?? 0);
+    if (isNaN(vipDiscountNum) || vipDiscountNum < 0 || vipDiscountNum > 100) {
+      showToast('Persentase diskon VIP harus antara 0% sampai 100%', 'error');
+      return;
+    }
+
+    let vipTaxNum: number | null = null;
+    if (formData.vip_tax_percentage !== undefined && formData.vip_tax_percentage !== null && String(formData.vip_tax_percentage).trim() !== '') {
+      const parsedVipTax = Number(formData.vip_tax_percentage);
+      if (isNaN(parsedVipTax) || parsedVipTax < 0 || parsedVipTax > 100) {
+        showToast('Tarif pajak khusus VIP harus antara 0% sampai 100% atau dikosongkan', 'error');
+        return;
+      }
+      vipTaxNum = parsedVipTax;
+    }
+
+    const vipServiceNum = Number(formData.vip_room_service_charge_percentage ?? 0);
+    if (isNaN(vipServiceNum) || vipServiceNum < 0 || vipServiceNum > 100) {
+      showToast('Biaya layanan VIP harus antara 0% sampai 100%', 'error');
       return;
     }
 
@@ -140,6 +172,11 @@ export const SettingsPage: React.FC = () => {
     const payload: Partial<StoreSettings> = {
       ...formData,
       tax_percentage: taxNum,
+      vip_discount_percentage: vipDiscountNum,
+      vip_tax_percentage: vipTaxNum,
+      vip_room_service_charge_percentage: vipServiceNum,
+      report_signer_name: (formData.report_signer_name || '').trim(),
+      report_city: (formData.report_city || '').trim(),
       operational_day_cutoff_time: rawCutoff,
       phone: normalizedPhone,
       receipt_paper_size: rawPaperSize,
@@ -401,6 +438,45 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
 
+        {/* NAMA OWNER / PENANDATANGAN LAPORAN & KOTA LAPORAN */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-stone-100 dark:border-stone-800">
+          <div>
+            <label htmlFor="report_signer_name" className="block font-bold text-stone-700 dark:text-stone-300 mb-1">
+              Nama Owner / Penandatangan Laporan
+            </label>
+            <input
+              id="report_signer_name"
+              type="text"
+              value={formData.report_signer_name || ''}
+              onChange={e => {
+                setIsDirty(true);
+                setFormData({ ...formData, report_signer_name: e.target.value });
+              }}
+              placeholder="Contoh: Budi Santoso (Owner)"
+              className="w-full px-3.5 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-semibold text-stone-900 dark:text-stone-100"
+            />
+            <p className="text-[10px] text-stone-500 mt-1">Dicantumkan pada blok tanda tangan laporan formal & ekspor PDF.</p>
+          </div>
+
+          <div>
+            <label htmlFor="report_city" className="block font-bold text-stone-700 dark:text-stone-300 mb-1">
+              Kota Laporan
+            </label>
+            <input
+              id="report_city"
+              type="text"
+              value={formData.report_city || ''}
+              onChange={e => {
+                setIsDirty(true);
+                setFormData({ ...formData, report_city: e.target.value });
+              }}
+              placeholder="Contoh: Jakarta Selatan"
+              className="w-full px-3.5 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-medium text-stone-900 dark:text-stone-100"
+            />
+            <p className="text-[10px] text-stone-500 mt-1">Digunakan untuk titimangsa tanggal & lokasi penandatanganan laporan.</p>
+          </div>
+        </div>
+
         {/* TARIF PAJAK PENJUALAN (PPN) */}
         <div className="p-4 bg-stone-50 dark:bg-[#171514] rounded-2xl border border-stone-200 dark:border-stone-800 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -434,6 +510,108 @@ export const SettingsPage: React.FC = () => {
             <span className="text-[11px] text-stone-500 font-medium">
               Pajak diterapkan otomatis pada checkout kasir setelah potongan promo diskon. Isi 0 jika tanpa pajak.
             </span>
+          </div>
+        </div>
+
+        {/* PENGATURAN TRANSAKSI RUANG VIP */}
+        <div className="p-4 bg-amber-500/5 dark:bg-amber-950/20 rounded-2xl border border-amber-300 dark:border-amber-800/60 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 dark:border-amber-900/40 pb-2">
+            <label className="font-extrabold text-[#3B2A1F] dark:text-[#D4A373] flex items-center gap-1.5 text-xs uppercase tracking-wider">
+              <Tag className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              Ketentuan Finansial Transaksi Ruang VIP
+            </label>
+            <span className="text-[11px] font-bold text-amber-800 dark:text-amber-300 bg-amber-200/60 dark:bg-amber-900/60 px-2 py-0.5 rounded-lg">
+              Area Ruang VIP
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Diskon Khusus VIP */}
+            <div className="space-y-1">
+              <label htmlFor="vip_discount_percentage" className="block font-bold text-stone-700 dark:text-stone-300 text-xs">
+                Diskon Transaksi VIP (%)
+              </label>
+              <div className="flex items-center gap-1.5">
+                <NumberInput
+                  id="vip_discount_percentage"
+                  min={0}
+                  max={100}
+                  allowDecimals={true}
+                  value={Number(formData.vip_discount_percentage) || 0}
+                  onChange={val => {
+                    setIsDirty(true);
+                    setFormData(prev => ({
+                      ...prev,
+                      vip_discount_percentage: val,
+                    }));
+                  }}
+                  className="w-24 px-3 py-1.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-stone-300 dark:border-stone-700 font-bold text-stone-900 dark:text-stone-100 focus:outline-hidden focus:border-[#C68B59]"
+                />
+                <span className="font-bold text-stone-600 dark:text-stone-400">%</span>
+              </div>
+              <p className="text-[10px] text-stone-500 leading-tight">
+                Potongan harga untuk pesanan area VIP. Tidak ditumpuk dengan promo umum (otomatis dipilih nominal diskon terbesar).
+              </p>
+            </div>
+
+            {/* Pajak Khusus VIP */}
+            <div className="space-y-1">
+              <label htmlFor="vip_tax_percentage" className="block font-bold text-stone-700 dark:text-stone-300 text-xs">
+                Tarif Pajak VIP (% Pengganti)
+              </label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  id="vip_tax_percentage"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  placeholder={`Default (${formData.tax_percentage ?? 0}%)`}
+                  value={formData.vip_tax_percentage === null || formData.vip_tax_percentage === undefined ? '' : formData.vip_tax_percentage}
+                  onChange={e => {
+                    setIsDirty(true);
+                    const v = e.target.value.trim();
+                    setFormData(prev => ({
+                      ...prev,
+                      vip_tax_percentage: v === '' ? null : Number(v),
+                    }));
+                  }}
+                  className="w-28 px-3 py-1.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-stone-300 dark:border-stone-700 font-bold text-stone-900 dark:text-stone-100 focus:outline-hidden focus:border-[#C68B59]"
+                />
+                <span className="font-bold text-stone-600 dark:text-stone-400">%</span>
+              </div>
+              <p className="text-[10px] text-stone-500 leading-tight">
+                Menggantikan tarif pajak umum jika diisi. Kosongkan untuk mengikuti tarif pajak umum ({formData.tax_percentage ?? 0}%).
+              </p>
+            </div>
+
+            {/* Biaya Layanan VIP */}
+            <div className="space-y-1">
+              <label htmlFor="vip_room_service_charge_percentage" className="block font-bold text-stone-700 dark:text-stone-300 text-xs">
+                Biaya Layanan Ruang VIP (%)
+              </label>
+              <div className="flex items-center gap-1.5">
+                <NumberInput
+                  id="vip_room_service_charge_percentage"
+                  min={0}
+                  max={100}
+                  allowDecimals={true}
+                  value={Number(formData.vip_room_service_charge_percentage) || 0}
+                  onChange={val => {
+                    setIsDirty(true);
+                    setFormData(prev => ({
+                      ...prev,
+                      vip_room_service_charge_percentage: val,
+                    }));
+                  }}
+                  className="w-24 px-3 py-1.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-stone-300 dark:border-stone-700 font-bold text-stone-900 dark:text-stone-100 focus:outline-hidden focus:border-[#C68B59]"
+                />
+                <span className="font-bold text-stone-600 dark:text-stone-400">%</span>
+              </div>
+              <p className="text-[10px] text-stone-500 leading-tight">
+                Biaya layanan tambahan khusus area VIP. Dihitung sekali atas dasar setelah diskon.
+              </p>
+            </div>
           </div>
         </div>
 

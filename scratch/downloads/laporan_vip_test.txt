@@ -1,0 +1,168 @@
+LAPORAN KEUANGAN & BISNIS BOOTH DAILY COFFEE
+Jl. Riau No. 88 | Telp: 081234567890
+
+Periode Laporan : Bulan Ini (Oktober 2026) Tanggal Cetak : Jumat, 23 Oktober 2026 pukul 15.15
+
+TOTAL PENJUALAN
+
+TOTAL PEMBELIAN
+
+Rp 52.650 (1 Transaksi)
+
+Rp 0 (0 Nota Belanja)
+
+Dicetak Oleh : Muhammad Ravi Rizkhan Status Data : Resmi Sistem POS
+
+ESTIMASI HPP
+
+ESTIMASI LABA KOTOR
+
+Rp 4.000 (Snapshot Riil (1 Trx))
+
+Rp 48.650 (Margin: 92.4%)
+
+ARUS KAS OPERASIONAL Uang Masuk (Penjualan)
+
+NOMINAL (RP)
+
+RINCIAN / METODE
+
+Rp 52.650 Tunai: Rp 52.650
+
+TOTAL / DETAIL QRIS: Rp 0
+
+Uang Keluar (Belanja & Refund)
+
+Rp 0 Belanja: Rp 0
+
+Total Refund: Rp 0
+
+· Rincian Pengembalian Dana
+
+Rp 0 Tunai: Rp 0
+
+Non-Tunai: Rp 0
+
+SELISIH ARUS KAS PERIODE
+
+Rp 52.650 Tipe Dine In / Takeaway
+
+Dine In: 1 | Takeaway: 0
+
+Komponen Transaksi (Snapshot)
+
+Diskon: Rp 5.000 Pajak: Rp 5.400
+
+Layanan VIP: Rp 2.250
+
+Distribusi Area Pesanan
+
+VIP: 1 Trx (Rp 52.650) Umum: 0 Trx (Rp 0)
+
+Total: 1 Trx Selesai
+
+* Arus Kas Operasional merupakan gabungan operasional tunai dan non-tunai (bank/QRIS), bukan saldo fisik laci kasir.
+
+RANK #1
+
+MENU TERLARIS (TOP 5) Kopi Susu Gula Aren
+
+QTY TERJUAL 2 Porsi
+
+TOTAL PENDAPATAN
+
+KONTRIBUSI
+
+Rp 50.000
+
+95%
+
+NO. NOTA / PO TOTAL PEMBELIAN PERIODE
+
+TANGGAL SUPPLIER / VENDOR
+
+-
+
+Tidak ada transaksi belanja restok pada periode ini
+
+JUMLAH ITEM TOTAL BIAYA
+
+-
+
+Rp 0
+
+0 Nota
+
+Rp 0
+
+NO. PESANAN
+
+TANGGAL & WAKTU
+
+KASIR
+
+ORD-20261023-0001 23 Okt 2026, 15.15 Muhammad Ravi Rizkhan
+
+TOTAL PERIODE
+
+STATUS
+SELESAI
+1 Trx Selesai
+
+OMZET
+
+HPP
+
+LABA KOTOR SUMBER HPP
+
+Rp 52.650
+
+Rp 4.000
+
+Rp 48.650
+
+Snapshot Riil
+
+Rp 52.650
+
+Rp 4.000
+
+Rp 48.650
+
+NO. NOTA ASAL
+-
+TOTAL REFUND PERIODE
+
+WAKTU ASAL
+-
+
+Dibuat & Diverifikasi oleh:
+
+WAKTU REFUND
+-
+
+PETUGAS METODE ALASAN
+
+-
+
+-
+
+Tidak ada transaksi refund pada
+
+periode ini
+
+0 Transaksi
+
+NOMINAL REFUND
+Rp 0
+Rp 0
+
+Bandung, 23 Oktober 2026 Disetujui oleh Owner:
+
+Muhammad Ravi Rizkhan
+
+Muhammad Ravi Pratama
+
+Booth Daily Coffee POS · Laporan Keuangan & Bisnis · Halaman 1 dari 1
+
+

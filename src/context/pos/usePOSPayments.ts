@@ -8,6 +8,7 @@ import { ToastType } from './usePOSToast';
 export interface UsePOSPaymentsProps {
   cart: CartItem[];
   orderType: OrderType;
+  orderArea?: 'regular' | 'vip';
   customerName: string;
   currentUser: User | null;
   clearCart: () => void;
@@ -19,6 +20,7 @@ export interface UsePOSPaymentsProps {
 export const usePOSPayments = ({
   cart,
   orderType,
+  orderArea = 'regular',
   customerName,
   currentUser,
   clearCart,
@@ -83,8 +85,11 @@ export const usePOSPayments = ({
       // For Guest without auth_token, explicitly use pin_token for the order creation request
       const isGuest = !localStorage.getItem('token');
       const orderToken = isGuest ? pinToken : undefined;
+      const isVip = orderArea === 'vip';
       const newOrder = await transactionService.processTransaction({
         order_type: orderType,
+        order_area: orderArea,
+        is_vip: isVip,
         items: itemsPayload,
         payment_method: paymentMethod,
         amount_paid: amountPaid,

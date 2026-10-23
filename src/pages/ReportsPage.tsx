@@ -191,6 +191,8 @@ export const ReportsPage: React.FC = () => {
       exportReportToExcel({
         reportData,
         storeName: effectiveStoreName,
+        reportSignerName: settings?.report_signer_name,
+        reportCity: settings?.report_city,
         filename: `Laporan_Keuangan_${effectiveStoreName.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
       });
       showToast('Laporan Excel (.xlsx) berhasil diunduh', 'success');
@@ -215,6 +217,8 @@ export const ReportsPage: React.FC = () => {
         storeAddress: settings?.address || 'Coffee Booth POS',
         storePhone: settings?.phone || '-',
         printedBy: currentUser?.name || 'Owner',
+        reportSignerName: settings?.report_signer_name,
+        reportCity: settings?.report_city,
         filename: `Laporan_Keuangan_${effectiveStoreName.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
       });
       showToast('Laporan PDF berhasil dibuat.', 'success');
@@ -557,7 +561,7 @@ export const ReportsPage: React.FC = () => {
       {/* SECTION 3: ANALISIS PENJUALAN & TIPE PESANAN             */}
       {/* ======================================================== */}
       {(activeTab === 'all' || activeTab === 'sales') && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {/* Payment Breakdown */}
           <div className="p-5 bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 shadow-sm space-y-4">
             <h3 className="font-extrabold text-sm text-stone-900 dark:text-stone-100 flex items-center gap-2">
@@ -628,7 +632,7 @@ export const ReportsPage: React.FC = () => {
           <div className="p-5 bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 shadow-sm space-y-4">
             <h3 className="font-extrabold text-sm text-stone-900 dark:text-stone-100 flex items-center gap-2">
               <Layers className="w-4 h-4 text-[#C68B59]" />
-              Penjualan Berdasarkan Tipe Pesanan
+              Tipe Pesanan
             </h3>
 
             <div className="space-y-2.5 text-xs">
@@ -666,6 +670,53 @@ export const ReportsPage: React.FC = () => {
                     {reportData.orderTypeBreakdown.takeaway.percentage}% Omzet
                   </span>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Komponen & Area VIP Breakdown */}
+          <div className="p-5 bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 shadow-sm space-y-4">
+            <h3 className="font-extrabold text-sm text-stone-900 dark:text-stone-100 flex items-center gap-2">
+              <DollarSign className="w-4 h-4 text-amber-600" />
+              Komponen & Area VIP
+            </h3>
+
+            <div className="space-y-2 text-xs">
+              <div className="p-2.5 bg-stone-50 dark:bg-[#171514] rounded-xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
+                <span className="text-stone-600 dark:text-stone-300 font-semibold">Total Diskon Terpotong:</span>
+                <span className="font-black text-emerald-600 dark:text-emerald-400">
+                  {formatRupiah(reportData.totalDiscounts)}
+                </span>
+              </div>
+              <div className="p-2.5 bg-stone-50 dark:bg-[#171514] rounded-xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
+                <span className="text-stone-600 dark:text-stone-300 font-semibold">Total Pajak (Snapshot):</span>
+                <span className="font-black text-stone-800 dark:text-stone-200">
+                  {formatRupiah(reportData.totalTax)}
+                </span>
+              </div>
+              <div className="p-2.5 bg-stone-50 dark:bg-[#171514] rounded-xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
+                <span className="text-stone-600 dark:text-stone-300 font-semibold">Biaya Layanan VIP:</span>
+                <span className="font-black text-amber-700 dark:text-amber-400">
+                  {formatRupiah(reportData.totalServiceCharge)}
+                </span>
+              </div>
+              <div className="p-2.5 bg-amber-500/10 dark:bg-amber-950/20 rounded-xl border border-amber-300 dark:border-amber-800/60 flex justify-between items-center">
+                <div>
+                  <span className="font-bold text-amber-900 dark:text-amber-300 block">Ruang VIP ({reportData.vipOrdersCount} Trx)</span>
+                  <span className="text-[10px] text-amber-700 dark:text-amber-400">Area VIP</span>
+                </div>
+                <span className="font-black text-amber-800 dark:text-amber-300">
+                  {formatRupiah(reportData.vipSales)}
+                </span>
+              </div>
+              <div className="p-2.5 bg-stone-50 dark:bg-[#171514] rounded-xl border border-stone-200 dark:border-stone-800 flex justify-between items-center">
+                <div>
+                  <span className="font-bold text-stone-800 dark:text-stone-200 block">Area Umum ({reportData.regularOrdersCount} Trx)</span>
+                  <span className="text-[10px] text-stone-400">Reguler</span>
+                </div>
+                <span className="font-black text-stone-800 dark:text-stone-200">
+                  {formatRupiah(reportData.regularSales)}
+                </span>
               </div>
             </div>
           </div>
@@ -846,6 +897,7 @@ export const ReportsPage: React.FC = () => {
                   <th className="p-3">Waktu Transaksi</th>
                   <th className="p-3">Kasir</th>
                   <th className="p-3">Tipe</th>
+                  <th className="p-3">Area</th>
                   <th className="p-3">Pembayaran</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Subtotal</th>
@@ -858,7 +910,7 @@ export const ReportsPage: React.FC = () => {
               <tbody className="divide-y divide-stone-100 dark:divide-stone-800 font-medium">
                 {reportData.transactionDetails.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="p-6 text-center text-stone-400 font-semibold">
+                    <td colSpan={12} className="p-6 text-center text-stone-400 font-semibold">
                       Belum ada transaksi penjualan pada periode ini.
                     </td>
                   </tr>
@@ -895,6 +947,15 @@ export const ReportsPage: React.FC = () => {
                             : 'bg-blue-500/10 text-blue-700 dark:text-blue-400'
                             }`}>
                             {o.order_type === 'take_away' ? 'Takeaway' : 'Dine In'}
+                          </span>
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                            o.order_area === 'vip' || o.is_vip
+                              ? 'bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800'
+                              : 'bg-stone-500/10 text-stone-700 dark:text-stone-400'
+                          }`}>
+                            {o.order_area === 'vip' || o.is_vip ? 'Ruang VIP' : 'Umum'}
                           </span>
                         </td>
                         <td className="p-3 font-bold text-stone-800 dark:text-stone-200">
@@ -1122,6 +1183,38 @@ export const ReportsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ======================================================== */}
+      {/* SECTION 8: PENGESAHAN LAPORAN FORMAL                    */}
+      {/* ======================================================== */}
+      <div className="p-5 bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-[#C68B59]" />
+            <h3 className="font-extrabold text-sm text-stone-900 dark:text-stone-100">
+              Pengesahan Dokumen Laporan Formal
+            </h3>
+          </div>
+          <p className="text-[11px] text-stone-500 font-medium">
+            Nama penandatangan dan kota ini otomatis dicantumkan pada footer berkas ekspor PDF dan lembar ringkasan Excel resmi.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-4 text-xs bg-stone-50 dark:bg-[#25221F] p-3.5 rounded-2xl border border-stone-200 dark:border-stone-800 w-full md:w-auto">
+          <div>
+            <span className="text-stone-400 text-[10px] block font-bold uppercase tracking-wider">Kota Penerbitan</span>
+            <span className="font-bold text-stone-800 dark:text-stone-200">
+              {settings?.report_city?.trim() || <span className="text-stone-400 italic">Belum diatur (tanpa kota)</span>}
+            </span>
+          </div>
+          <div className="w-px h-8 bg-stone-200 dark:bg-stone-700 hidden sm:block" />
+          <div>
+            <span className="text-stone-400 text-[10px] block font-bold uppercase tracking-wider">Penandatangan Laporan (Owner)</span>
+            <span className="font-bold text-stone-800 dark:text-stone-200">
+              {settings?.report_signer_name?.trim() || <span className="text-stone-500 font-medium">Owner / Manajemen (Default)</span>}
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

@@ -2988,9 +2988,15 @@ export class MockStore {
         created_by_name: orderData.created_by_name || activeShift?.opened_by_name || 'Kasir',
         created_by_role: orderData.created_by_role || 'karyawan',
         order_type: orderData.order_type || 'take_away',
+        order_area: orderData.order_area || (orderData.is_vip ? 'vip' : 'regular'),
+        is_vip: Boolean(orderData.is_vip || orderData.order_area === 'vip'),
         discount: typeof orderData.discount === 'number' ? orderData.discount : 0,
+        discount_name: orderData.discount_name || null,
         subtotal: typeof orderData.subtotal === 'number' ? orderData.subtotal : calculatedSubtotal,
         tax: typeof orderData.tax === 'number' ? orderData.tax : 0,
+        tax_percentage: typeof orderData.tax_percentage === 'number' ? orderData.tax_percentage : undefined,
+        service_charge: typeof orderData.service_charge === 'number' ? orderData.service_charge : 0,
+        service_charge_percentage: typeof orderData.service_charge_percentage === 'number' ? orderData.service_charge_percentage : undefined,
         total_amount: calculatedTotal,
         created_at: orderData.created_at || now.toISOString(),
         items: snapshottedItems,
@@ -3661,6 +3667,11 @@ export class MockStore {
       ...s,
       operational_day_cutoff_time: s?.operational_day_cutoff_time || '04:00',
       receipt_paper_size: s?.receipt_paper_size === '58mm' ? '58mm' : '80mm',
+      report_signer_name: s?.report_signer_name || '',
+      report_city: s?.report_city || '',
+      vip_discount_percentage: s?.vip_discount_percentage ?? 0,
+      vip_tax_percentage: s?.vip_tax_percentage ?? null,
+      vip_room_service_charge_percentage: s?.vip_room_service_charge_percentage ?? 0,
     });
   }
 
@@ -3683,6 +3694,27 @@ export class MockStore {
         }
       }
 
+      if (newSettings.vip_discount_percentage !== undefined) {
+        const v = Number(newSettings.vip_discount_percentage);
+        if (isNaN(v) || v < 0 || v > 100) {
+          throw new Error('Persentase diskon Ruang VIP harus berada di antara 0% hingga 100%.');
+        }
+      }
+
+      if (newSettings.vip_tax_percentage !== undefined && newSettings.vip_tax_percentage !== null && (newSettings.vip_tax_percentage as any) !== '') {
+        const v = Number(newSettings.vip_tax_percentage);
+        if (isNaN(v) || v < 0 || v > 100) {
+          throw new Error('Persentase pajak khusus Ruang VIP harus berada di antara 0% hingga 100% atau dikosongkan.');
+        }
+      }
+
+      if (newSettings.vip_room_service_charge_percentage !== undefined) {
+        const v = Number(newSettings.vip_room_service_charge_percentage);
+        if (isNaN(v) || v < 0 || v > 100) {
+          throw new Error('Persentase biaya layanan Ruang VIP harus berada di antara 0% hingga 100%.');
+        }
+      }
+
       let normalizedPhone = this.state.settings.phone;
       if (newSettings.phone !== undefined) {
         const rawPhone = String(newSettings.phone).trim();
@@ -3699,6 +3731,31 @@ export class MockStore {
           normalizedPhone = '';
         }
       }
+
+      const cleanSigner = newSettings.report_signer_name !== undefined
+        ? String(newSettings.report_signer_name).trim()
+        : (this.state.settings.report_signer_name || '');
+
+      const cleanCity = newSettings.report_city !== undefined
+        ? String(newSettings.report_city).trim()
+        : (this.state.settings.report_city || '');
+
+      const cleanVipDiscount = newSettings.vip_discount_percentage !== undefined
+        ? Math.min(100, Math.max(0, Number(newSettings.vip_discount_percentage) || 0))
+        : (this.state.settings.vip_discount_percentage ?? 0);
+
+      let cleanVipTax: number | null = this.state.settings.vip_tax_percentage ?? null;
+      if (newSettings.vip_tax_percentage !== undefined) {
+        if (newSettings.vip_tax_percentage === null || (newSettings.vip_tax_percentage as any) === '' || isNaN(Number(newSettings.vip_tax_percentage))) {
+          cleanVipTax = null;
+        } else {
+          cleanVipTax = Math.min(100, Math.max(0, Number(newSettings.vip_tax_percentage)));
+        }
+      }
+
+      const cleanVipService = newSettings.vip_room_service_charge_percentage !== undefined
+        ? Math.min(100, Math.max(0, Number(newSettings.vip_room_service_charge_percentage) || 0))
+        : (this.state.settings.vip_room_service_charge_percentage ?? 0);
 
       this.state.settings = {
         ...this.state.settings,
@@ -3720,6 +3777,11 @@ export class MockStore {
             ? newSettings.receipt_paper_size
             : (this.state.settings.receipt_paper_size || '80mm'),
         phone: normalizedPhone,
+        report_signer_name: cleanSigner,
+        report_city: cleanCity,
+        vip_discount_percentage: cleanVipDiscount,
+        vip_tax_percentage: cleanVipTax,
+        vip_room_service_charge_percentage: cleanVipService,
       };
       this.persist();
       return deepClone(this.state.settings);

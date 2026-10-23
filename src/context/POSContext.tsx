@@ -76,6 +76,8 @@ interface POSContextType {
   cart: CartItem[];
   orderType: OrderType;
   setOrderType: (type: OrderType) => void;
+  orderArea: 'regular' | 'vip';
+  setOrderArea: (area: 'regular' | 'vip') => void;
   customerName: string;
   setCustomerName: (name: string) => void;
   selectedCategory: string;
@@ -552,6 +554,8 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     cart,
     orderType,
     setOrderType,
+    orderArea,
+    setOrderArea,
     customerName,
     setCustomerName,
     addToCart,
@@ -579,6 +583,7 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const paymentsDomain = usePOSPayments({
     cart,
     orderType,
+    orderArea,
     customerName,
     currentUser,
     clearCart,
@@ -1141,6 +1146,8 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         cart,
         orderType,
         setOrderType,
+        orderArea,
+        setOrderArea,
         customerName,
         setCustomerName,
         selectedCategory,

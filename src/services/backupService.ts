@@ -423,6 +423,24 @@ export function validateBackupPayload(payload: any): BackupPayload {
   if (isNaN(tax) || tax < 0 || tax > 100) {
     throw new Error('Tarif pajak pada pengaturan harus berada di antara 0% hingga 100%.');
   }
+  if (store.settings.vip_discount_percentage !== undefined && store.settings.vip_discount_percentage !== null) {
+    const vipDisc = Number(store.settings.vip_discount_percentage);
+    if (isNaN(vipDisc) || vipDisc < 0 || vipDisc > 100) {
+      throw new Error('Diskon VIP pada pengaturan harus berada di antara 0% hingga 100%.');
+    }
+  }
+  if (store.settings.vip_tax_percentage !== undefined && store.settings.vip_tax_percentage !== null) {
+    const vipTax = Number(store.settings.vip_tax_percentage);
+    if (isNaN(vipTax) || vipTax < 0 || vipTax > 100) {
+      throw new Error('Tarif pajak VIP pada pengaturan harus berada di antara 0% hingga 100%.');
+    }
+  }
+  if (store.settings.vip_room_service_charge_percentage !== undefined && store.settings.vip_room_service_charge_percentage !== null) {
+    const vipService = Number(store.settings.vip_room_service_charge_percentage);
+    if (isNaN(vipService) || vipService < 0 || vipService > 100) {
+      throw new Error('Biaya layanan VIP pada pengaturan harus berada di antara 0% hingga 100%.');
+    }
+  }
   const cutoff = (store.settings.operational_day_cutoff_time || '04:00').trim();
   if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(cutoff)) {
     throw new Error(`Format jam cutoff operasional ("${cutoff}") tidak valid. Gunakan format 24 jam HH:mm.`);

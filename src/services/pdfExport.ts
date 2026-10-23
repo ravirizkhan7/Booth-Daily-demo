@@ -10,6 +10,8 @@ export interface PDFReportOptions {
   storePhone?: string;
   printedBy?: string;
   filename?: string;
+  reportSignerName?: string;
+  reportCity?: string;
 }
 
 export const exportReportToPDF = ({
@@ -18,7 +20,9 @@ export const exportReportToPDF = ({
   storeAddress = 'Outlet POS',
   storePhone = '-',
   printedBy = 'Owner',
-  filename
+  filename,
+  reportSignerName,
+  reportCity,
 }: PDFReportOptions) => {
   const DocConstructor: any = (jsPDF as any).jsPDF || jsPDF;
   const doc = new DocConstructor({
@@ -166,6 +170,18 @@ export const exportReportToPDF = ({
         formatRupiah(reportData.netCashFlow),
         `Tipe Dine In / Takeaway`,
         `Dine In: ${reportData.orderTypeBreakdown.dineIn.count} | Takeaway: ${reportData.orderTypeBreakdown.takeaway.count}`
+      ],
+      [
+        'Komponen Transaksi (Snapshot)',
+        `Diskon: ${formatRupiah(reportData.totalDiscounts)}`,
+        `Pajak: ${formatRupiah(reportData.totalTax)}`,
+        `Layanan VIP: ${formatRupiah(reportData.totalServiceCharge)}`
+      ],
+      [
+        'Distribusi Area Pesanan',
+        `VIP: ${reportData.vipOrdersCount} Trx (${formatRupiah(reportData.vipSales)})`,
+        `Umum: ${reportData.regularOrdersCount} Trx (${formatRupiah(reportData.regularSales)})`,
+        `Total: ${reportData.totalOrdersCount} Trx Selesai`
       ]
     ],
     theme: 'grid',
@@ -482,14 +498,27 @@ export const exportReportToPDF = ({
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(80, 80, 80);
 
+  const todayFormatted = new Intl.DateTimeFormat('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  }).format(new Date());
+
+  const locationDateStr = reportCity?.trim()
+    ? `${reportCity.trim()}, ${todayFormatted}`
+    : todayFormatted;
+
+  const effectiveSignerName = reportSignerName?.trim() || 'Owner / Manajemen';
+
   doc.text('Dibuat & Diverifikasi oleh:', 25, signY);
-  doc.text('Disetujui oleh Owner:', pageWidth - 65, signY);
+  doc.text(locationDateStr, pageWidth - 47.5, signY - 4, { align: 'center' });
+  doc.text('Disetujui oleh Owner:', pageWidth - 47.5, signY, { align: 'center' });
 
   doc.line(20, signY + 16, 65, signY + 16);
   doc.line(pageWidth - 70, signY + 16, pageWidth - 25, signY + 16);
 
   doc.text(printedBy || 'Kasir / Barista', 42.5, signY + 20, { align: 'center' });
-  doc.text('Muhammad Ravi Rizkhan', pageWidth - 47.5, signY + 20, { align: 'center' });
+  doc.text(effectiveSignerName, pageWidth - 47.5, signY + 20, { align: 'center' });
 
   // Page Numbers
   const totalPages = (doc as any).internal.getNumberOfPages();

@@ -62,6 +62,15 @@ export interface ReportData {
   cashOut: number;
   netCashFlow: number;
 
+  // Diskon, Pajak, dan Biaya Layanan VIP
+  totalDiscounts: number;
+  totalTax: number;
+  totalServiceCharge: number;
+  vipOrdersCount: number;
+  vipSales: number;
+  regularOrdersCount: number;
+  regularSales: number;
+
   // Analisis Pembayaran
   paymentBreakdown: {
     cash: PaymentSummaryItem;
@@ -97,6 +106,11 @@ export interface ReportTransactionDetailItem {
   marginPercent: number;
   hppCategory: HPPCategory;
   hppCategoryLabel: string;
+  discount: number;
+  tax: number;
+  serviceCharge: number;
+  isVip: boolean;
+  orderArea: 'regular' | 'vip';
 }
 
 /**
@@ -407,6 +421,12 @@ export function getOrderFinancials(
       ? 'Partial Snapshot'
       : 'Estimasi Legacy';
 
+  const discount = Number(order.discount) || 0;
+  const tax = Number(order.tax) || 0;
+  const serviceCharge = Number(order.service_charge) || 0;
+  const isVip = Boolean(order.is_vip || order.order_area === 'vip');
+  const orderArea: 'regular' | 'vip' = isVip ? 'vip' : 'regular';
+
   return {
     order,
     omzet,
@@ -415,6 +435,11 @@ export function getOrderFinancials(
     marginPercent,
     hppCategory,
     hppCategoryLabel,
+    discount,
+    tax,
+    serviceCharge,
+    isVip,
+    orderArea,
   };
 }
 
@@ -544,6 +569,30 @@ export function computeReportData({
   const totalSales = filteredOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
   const totalOrdersCount = filteredOrders.length;
   const avgOrderValue = totalOrdersCount > 0 ? Math.round(totalSales / totalOrdersCount) : 0;
+
+  // 4b. Diskon, Pajak, dan Biaya Layanan VIP
+  let totalDiscounts = 0;
+  let totalTax = 0;
+  let totalServiceCharge = 0;
+  let vipOrdersCount = 0;
+  let vipSales = 0;
+  let regularOrdersCount = 0;
+  let regularSales = 0;
+
+  filteredOrders.forEach(o => {
+    const amt = Number(o.total_amount) || 0;
+    totalDiscounts += Number(o.discount) || 0;
+    totalTax += Number(o.tax) || 0;
+    totalServiceCharge += Number(o.service_charge) || 0;
+    const isVip = Boolean(o.is_vip || o.order_area === 'vip');
+    if (isVip) {
+      vipOrdersCount++;
+      vipSales += amt;
+    } else {
+      regularOrdersCount++;
+      regularSales += amt;
+    }
+  });
 
   // 5. Overview Pembelian Restok
   const totalPurchases = filteredPurchases.reduce((sum, p) => sum + (Number(p.total_amount) || 0), 0);
@@ -724,6 +773,13 @@ export function computeReportData({
     qrisRefunds,
     unknownRefunds,
     refundCount,
+    totalDiscounts,
+    totalTax,
+    totalServiceCharge,
+    vipOrdersCount,
+    vipSales,
+    regularOrdersCount,
+    regularSales,
     cashIn,
     cashOut,
     netCashFlow,

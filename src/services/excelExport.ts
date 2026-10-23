@@ -5,6 +5,8 @@ export interface ExcelReportOptions {
   reportData: ReportData;
   storeName?: string;
   filename?: string;
+  reportSignerName?: string;
+  reportCity?: string;
 }
 
 // ─── COLOUR PALETTE ─────────────────────────────────────────────────────────
@@ -128,7 +130,7 @@ function fdt(s?: string | null): string {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHEET 1 — RINGKASAN LAPORAN (Executive Summary)
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
+function buildSummarySheet(rd: ReportData, storeName: string, reportSignerName?: string, reportCity?: string): XLSX.WorkSheet {
   const NC = 5;
   const rows: XLSX.CellObject[][] = [];
   const merges: XLSX.Range[] = [];
@@ -159,6 +161,14 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
     const r = push([cs('Filter Kasir / User', S.mKey), cs(userDisplay, S.mVal), cs('', S.mVal), cs('', S.mVal), cs('', S.mVal)]);
     span(r, 1, NC - 1);
   }
+  if (reportCity?.trim()) {
+    const r = push([cs('Kota Laporan', S.mKey), cs(reportCity.trim(), S.mVal), cs('', S.mVal), cs('', S.mVal), cs('', S.mVal)]);
+    span(r, 1, NC - 1);
+  }
+  if (reportSignerName?.trim()) {
+    const r = push([cs('Penandatangan / Owner', S.mKey), cs(reportSignerName.trim(), S.mVal), cs('', S.mVal), cs('', S.mVal), cs('', S.mVal)]);
+    span(r, 1, NC - 1);
+  }
   {
     const r = push([cs('Tanggal Cetak', S.mKey), cs(printDate, S.mVal), cs('', S.mVal), cs('', S.mVal), cs('', S.mVal)]);
     span(r, 1, NC - 1);
@@ -187,6 +197,11 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
 
   const kpis: [string, number, string, string, string][] = [
     ['Total Penjualan (Omzet)', rd.totalSales, `${rd.totalOrdersCount} Transaksi`, 'Total penerimaan periode ini', `AOV Rp ${rd.avgOrderValue.toLocaleString('id-ID')}`],
+    ['Total Diskon Terpotong', rd.totalDiscounts, '', 'Akumulasi diskon promo & VIP', ''],
+    ['Total Pajak Transaksi', rd.totalTax, '', 'Pajak riil tersimpan pada snapshot', ''],
+    ['Biaya Layanan VIP', rd.totalServiceCharge, '', 'Biaya layanan khusus area VIP', ''],
+    ['Penjualan Area VIP', rd.vipSales, `${rd.vipOrdersCount} Transaksi`, 'Total transaksi ruang VIP', ''],
+    ['Penjualan Area Umum', rd.regularSales, `${rd.regularOrdersCount} Transaksi`, 'Total transaksi reguler', ''],
     ['Total Pembelian (Restok)', rd.totalPurchases, `${rd.totalPurchasesCount} Nota`, 'Pengeluaran bahan baku periode ini', 'Hanya periode aktif'],
     ['Estimasi HPP Menu', rd.totalEstimatedHPP, hppCategoryLabel, 'Biaya modal bahan menu terjual', hppStatusNote],
     ['Estimasi Laba Kotor', rd.estimatedGrossProfit, `Margin ${rd.grossProfitMarginPercent}%`, 'Penjualan dikurangi Estimasi HPP', 'Bukan laba bersih'],
@@ -350,11 +365,13 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
       const o = d.order;
       const a = i % 2 === 1;
       const isRefunded = o.payment?.status === 'refunded';
+      const isVip = Boolean(o.is_vip || o.order_area === 'vip');
+      const typeLabel = `${o.order_type === 'take_away' ? 'Takeaway' : 'Dine In'}${isVip ? ' (VIP)' : ''}`;
       push([
         cs(o.order_number, a ? S.tdAL : S.tdL),
         cs(fdt(o.created_at), a ? S.tdAL : S.tdL),
         cs(o.created_by_name || 'Kasir', a ? S.tdAL : S.tdL),
-        cs(o.order_type === 'take_away' ? 'Takeaway' : 'Dine In', a ? S.tdAC : S.tdC),
+        cs(typeLabel, a ? S.tdAC : S.tdC),
         cs(String(o.payment?.method || 'Cash').toUpperCase(), a ? S.tdAC : S.tdC),
         cs(isRefunded ? 'REFUNDED' : 'SELESAI', a ? S.tdAC : S.tdC),
         cn(Number(o.subtotal) || Number(o.total_amount) || 0, a ? S.tdAR : S.tdR),
@@ -388,7 +405,7 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
     { wch: 21 }, // NO. PESANAN
     { wch: 22 }, // TANGGAL & WAKTU
     { wch: 16 }, // KASIR
-    { wch: 12 }, // TIPE
+    { wch: 16 }, // TIPE
     { wch: 13 }, // PEMBAYARAN
     { wch: 13 }, // STATUS
     { wch: 15 }, // SUBTOTAL
@@ -549,9 +566,11 @@ export const exportReportToExcel = ({
   reportData,
   storeName = 'Booth Daily',
   filename,
+  reportSignerName,
+  reportCity,
 }: ExcelReportOptions): void => {
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildSummarySheet(reportData, storeName), 'Ringkasan Laporan');
+  XLSX.utils.book_append_sheet(wb, buildSummarySheet(reportData, storeName, reportSignerName, reportCity), 'Ringkasan Laporan');
   XLSX.utils.book_append_sheet(wb, buildSalesSheet(reportData, storeName), 'Detail Penjualan');
   XLSX.utils.book_append_sheet(wb, buildPurchasesSheet(reportData, storeName), 'Detail Pembelian Restok');
   XLSX.utils.book_append_sheet(wb, buildRefundsSheet(reportData, storeName), 'Daftar Refund');

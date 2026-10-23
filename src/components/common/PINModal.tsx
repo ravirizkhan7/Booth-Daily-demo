@@ -13,6 +13,7 @@ export const PINModal: React.FC = () => {
     closePinModal,
     cart,
     orderType,
+    orderArea,
     customerName,
     processPaymentWithPin,
     currentUser,
@@ -40,14 +41,22 @@ export const PINModal: React.FC = () => {
   const totalItemTypes = cart.length;
   const totalItemQty = cart.reduce((sum, item) => sum + item.qty, 0);
   const rawSubtotal = cart.reduce((sum, item) => sum + item.product.price * item.qty, 0);
+  const isVip = orderArea === 'vip';
   const {
     subtotal,
     discount,
     discountName,
     tax,
     taxPercentage,
+    serviceCharge,
+    serviceChargePercentage,
     totalAmount,
-  } = calculateOrderPreview(rawSubtotal, discountRules, settings?.tax_percentage ?? 0);
+  } = calculateOrderPreview(rawSubtotal, discountRules, settings?.tax_percentage ?? 0, {
+    isVip,
+    vipDiscountPercentage: settings?.vip_discount_percentage,
+    vipTaxPercentage: settings?.vip_tax_percentage,
+    vipServiceChargePercentage: settings?.vip_room_service_charge_percentage,
+  });
 
   const parsedAmountPaid = selectedMethod === 'cash'
     ? (() => {
@@ -134,9 +143,18 @@ export const PINModal: React.FC = () => {
               <span className="text-[11px] font-extrabold uppercase text-stone-400 tracking-wider">
                 RINGKASAN TRANSAKSI
               </span>
-              <span className="text-[11px] font-extrabold text-[#3B2A1F] dark:text-[#D4A373] bg-[#3B2A1F]/10 dark:bg-[#D4A373]/10 px-2.5 py-0.5 rounded-full uppercase">
-                {orderType === 'dine_in' ? 'Dine In' : 'Take Away'}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full uppercase ${
+                  isVip
+                    ? 'text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700/50'
+                    : 'text-stone-700 dark:text-stone-300 bg-stone-100 dark:bg-stone-800'
+                }`}>
+                  {isVip ? 'Ruang VIP' : 'Area Umum'}
+                </span>
+                <span className="text-[11px] font-extrabold text-[#3B2A1F] dark:text-[#D4A373] bg-[#3B2A1F]/10 dark:bg-[#D4A373]/10 px-2.5 py-0.5 rounded-full uppercase">
+                  {orderType === 'dine_in' ? 'Dine In' : 'Take Away'}
+                </span>
+              </div>
             </div>
 
             <div className="space-y-1 text-xs">
@@ -170,6 +188,13 @@ export const PINModal: React.FC = () => {
                 <span>Pajak ({taxPercentage}%)</span>
                 <span className="font-bold text-stone-900 dark:text-stone-100">{formatRupiah(tax)}</span>
               </div>
+
+              {isVip && (
+                <div className="flex justify-between text-stone-600 dark:text-stone-300">
+                  <span>Biaya Layanan VIP ({serviceChargePercentage}%)</span>
+                  <span className="font-bold text-amber-700 dark:text-amber-400">{formatRupiah(serviceCharge)}</span>
+                </div>
+              )}
 
               {customerName && (
                 <div className="flex justify-between text-stone-600 dark:text-stone-300">

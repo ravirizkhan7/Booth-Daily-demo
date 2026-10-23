@@ -16,7 +16,9 @@ export const ReceiptModal: React.FC = () => {
   const discount       = currentReceiptOrder.discount       ?? 0;
   const discountName   = currentReceiptOrder.discount_name  ?? null;
   const tax            = currentReceiptOrder.tax            ?? 0;
+  const serviceCharge  = currentReceiptOrder.service_charge ?? 0;
   const totalAmount    = currentReceiptOrder.total_amount   ?? 0;
+  const isVip          = currentReceiptOrder.is_vip || currentReceiptOrder.order_area === 'vip';
 
   const storeName = settings?.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
 
@@ -27,6 +29,8 @@ export const ReceiptModal: React.FC = () => {
 
   const handleCopyText = () => {
     const promoLine = discountName ? `Promo     : ${discountName}\n` : '';
+    const areaLine = isVip ? `Area      : RUANG VIP\n` : `Area      : UMUM\n`;
+    const serviceLine = serviceCharge > 0 ? `Layanan VIP: ${formatRupiah(serviceCharge)}\n` : '';
     const discountLine = discount > 0
       ? `-${formatRupiah(discount)}`
       : formatRupiah(0);
@@ -39,7 +43,7 @@ No. Pesanan: ${currentReceiptOrder.order_number}
 Tanggal    : ${formatDate(currentReceiptOrder.created_at)}
 Kasir      : ${currentReceiptOrder.created_by_name}
 Tipe       : ${currentReceiptOrder.order_type === 'dine_in' ? 'DINE IN' : 'TAKE AWAY'}
-Status     : ${isRefunded ? 'DIREFUND' : 'LUNAS'}
+${areaLine}Status     : ${isRefunded ? 'DIREFUND' : 'LUNAS'}
 --------------------------------
 ${(currentReceiptOrder.items || [])
   .map(item => `${item.qty}x ${item.product_name} @ ${formatRupiah(item.price)}\n   Subtotal: ${formatRupiah(item.subtotal)}${item.notes ? `\n   Catatan: ${item.notes}` : ''}`)
@@ -48,7 +52,7 @@ ${(currentReceiptOrder.items || [])
 Subtotal  : ${formatRupiah(subtotal)}
 Diskon    : ${discountLine}
 ${promoLine}Pajak     : ${formatRupiah(tax)}
-TOTAL     : ${formatRupiah(totalAmount)}
+${serviceLine}TOTAL     : ${formatRupiah(totalAmount)}
 Pembayaran: ${(currentReceiptOrder.payment?.method || 'CASH').toUpperCase()}
 Diterima  : ${formatRupiah(currentReceiptOrder.payment?.amount_paid || totalAmount)}
 Kembali   : ${formatRupiah(currentReceiptOrder.payment?.change || 0)}
@@ -134,6 +138,12 @@ ${settings.receipt_footer}
                   {currentReceiptOrder.customer_name ? ` (${currentReceiptOrder.customer_name})` : ''}
                 </span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-stone-500">Area:</span>
+                <span className={`font-bold uppercase ${isVip ? 'text-amber-700 dark:text-amber-400' : 'text-stone-700'}`}>
+                  {isVip ? 'RUANG VIP' : 'AREA UMUM'}
+                </span>
+              </div>
               {isRefunded && (
                 <div className="space-y-1 pt-1.5 border-t border-dashed border-rose-200">
                   <div className="flex justify-between text-rose-600 font-bold">
@@ -209,6 +219,14 @@ ${settings.receipt_footer}
                 <span>Pajak:</span>
                 <span>{formatRupiah(tax)}</span>
               </div>
+
+              {/* Biaya Layanan VIP */}
+              {serviceCharge > 0 && (
+                <div className="flex justify-between text-stone-600">
+                  <span>Biaya Layanan VIP:</span>
+                  <span className="font-semibold text-amber-700">{formatRupiah(serviceCharge)}</span>
+                </div>
+              )}
             </div>
 
             {/* Total & Payment */}

@@ -92,6 +92,7 @@ export function calculateShiftFinancials(
   const gross_sales = completedOrders.reduce((sum, o) => sum + (Number(o.subtotal) || 0), 0);
   const discount_total = completedOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
   const tax_total = completedOrders.reduce((sum, o) => sum + (Number(o.tax) || 0), 0);
+  const service_charge_total = completedOrders.reduce((sum, o) => sum + (Number(o.service_charge) || 0), 0);
   const net_sales = completedOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
 
   // Pemecahan penerimaan kasir per Metode Pembayaran (Gross Collection)
@@ -247,6 +248,7 @@ export function calculateShiftFinancials(
     gross_sales,
     discount_total,
     tax_total,
+    service_charge_total,
     net_sales,
     estimated_hpp,
     estimated_gross_profit,

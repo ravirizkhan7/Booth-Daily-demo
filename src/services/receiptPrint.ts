@@ -408,11 +408,13 @@ export const getReceiptHtml = (
   const isRefunded = order.payment?.status === 'refunded';
 
   // Snapshot fields — read directly from backend order, NEVER recalculate
-  const subtotal     = order.subtotal     ?? 0;
-  const discount     = order.discount     ?? 0;
-  const discountName = order.discount_name ? escapeHtml(order.discount_name) : null;
-  const tax          = order.tax          ?? 0;
-  const totalAmount  = order.total_amount ?? 0;
+  const subtotal       = order.subtotal       ?? 0;
+  const discount       = order.discount       ?? 0;
+  const discountName   = order.discount_name ? escapeHtml(order.discount_name) : null;
+  const tax            = order.tax            ?? 0;
+  const serviceCharge  = order.service_charge ?? 0;
+  const totalAmount    = order.total_amount   ?? 0;
+  const isVip          = order.is_vip || order.order_area === 'vip';
 
   const discountDisplay = discount > 0
     ? `-${formatRupiah(discount)}`
@@ -487,6 +489,10 @@ export const getReceiptHtml = (
           <span class="label-dim">Tipe Pesanan:</span>
           <span class="font-bold uppercase" style="color: #c68b59;">${orderType}${custName}</span>
         </div>
+        <div class="flex-row">
+          <span class="label-dim">Area:</span>
+          <span class="font-bold uppercase" style="${isVip ? 'color: #d97706;' : ''}">${isVip ? 'RUANG VIP' : 'AREA UMUM'}</span>
+        </div>
         ${
           isRefunded
             ? `<div class="flex-row font-bold" style="color: #e11d48;"><span>Status:</span><span class="uppercase">DIREFUND</span></div>`
@@ -514,6 +520,16 @@ export const getReceiptHtml = (
           <span>Pajak:</span>
           <span>${formatRupiah(tax)}</span>
         </div>
+        ${
+          serviceCharge > 0
+            ? `
+              <div class="flex-row value-dim">
+                <span>Biaya Layanan VIP:</span>
+                <span style="font-weight: 600; color: #d97706;">${formatRupiah(serviceCharge)}</span>
+              </div>
+            `
+            : ''
+        }
       </div>
 
       <!-- Total & Payment -->
@@ -581,6 +597,10 @@ export const getReceiptHtml = (
         <div class="flex-row">
           <span class="label-dim">Tipe Pesanan:</span>
           <span class="font-bold uppercase" style="color: #c68b59;">${orderType}${custName}</span>
+        </div>
+        <div class="flex-row">
+          <span class="label-dim">Area:</span>
+          <span class="font-bold uppercase" style="${isVip ? 'color: #d97706;' : ''}">${isVip ? 'RUANG VIP' : 'AREA UMUM'}</span>
         </div>
       </div>
 

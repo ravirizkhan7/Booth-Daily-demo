@@ -1319,6 +1319,12 @@ export const ShiftsPage: React.FC = () => {
                       </p>
                     </div>
                     <div>
+                      <span className="text-stone-500">Biaya Layanan VIP:</span>
+                      <p className="font-bold text-purple-700 dark:text-purple-400">
+                        {formatRupiah(selectedDetailData.financials.service_charge_total || 0)}
+                      </p>
+                    </div>
+                    <div>
                       <span className="text-stone-500">Penjualan Bersih (Net):</span>
                       <p className="font-black text-emerald-600 dark:text-emerald-400 text-sm">
                         {formatRupiah(selectedDetailData.financials.net_sales)}

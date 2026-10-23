@@ -223,6 +223,7 @@ export interface ShiftFinancialSnapshot {
   gross_sales: number;
   discount_total: number;
   tax_total: number;
+  service_charge_total?: number;
   net_sales: number;
   estimated_hpp: number;
   estimated_gross_profit: number;
@@ -272,15 +273,22 @@ export interface Shift {
 
 export type OrderHPPSource = 'transaction_snapshot' | 'legacy_estimate' | 'partial_snapshot';
 
+export type OrderArea = 'regular' | 'vip';
+
 export interface Order {
   id: string;
   order_number: string;
   order_type: OrderType;
+  order_area?: OrderArea;
+  is_vip?: boolean;
   created_by_user_id?: string;
   created_by_name?: string;
   created_by_role?: UserRole;
   subtotal: number;
   tax: number;
+  tax_percentage?: number;
+  service_charge?: number;
+  service_charge_percentage?: number;
   discount: number;
   discount_name?: string | null;
   total_amount: number;
@@ -315,4 +323,9 @@ export interface Settings {
   currency_symbol: string;
   operational_day_cutoff_time?: string;
   receipt_paper_size?: ReceiptPaperSize;
+  report_signer_name?: string;
+  report_city?: string;
+  vip_discount_percentage?: number;
+  vip_tax_percentage?: number | null;
+  vip_room_service_charge_percentage?: number;
 }

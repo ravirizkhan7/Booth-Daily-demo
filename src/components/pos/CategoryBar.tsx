@@ -93,8 +93,8 @@ export const CategoryBar: React.FC = () => {
     };
   }, [updateScrollState]);
 
-  const getCategoryIcon = (iconName: string) => {
-    switch (iconName.toLowerCase()) {
+  const getCategoryIcon = (iconName?: string) => {
+    switch ((iconName || '').toLowerCase()) {
       case 'coffee':
         return <Coffee className="w-4 h-4" />;
 

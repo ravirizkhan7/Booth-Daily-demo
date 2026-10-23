@@ -7,6 +7,8 @@ import { calculateOrderPreview } from '../utils/orderCalculation';
 
 export interface CreateTransactionPayload {
   order_type: OrderType;
+  order_area?: 'regular' | 'vip';
+  is_vip?: boolean;
   items: Omit<OrderItem, 'id' | 'subtotal'>[];
   payment_method: PaymentMethod;
   amount_paid: number;
@@ -20,7 +22,7 @@ export const transactionService = {
    * Orchestrates the complete checkout transaction:
    * 1. Validates cart content and active cashier shift.
    * 2. Retrieves store settings and active promo discount rules.
-   * 3. Calculates pure financial figures (subtotal, discount, tax, total).
+   * 3. Calculates pure financial figures (subtotal, discount, tax, service charge, total).
    * 4. Validates payment requirements (sufficient cash or QRIS).
    * 5. Assembles complete snapshot Order entity bound to active shift.
    * 6. Dispatches order creation and atomic stock deduction via orderService.
@@ -46,10 +48,17 @@ export const transactionService = {
       0
     );
 
+    const isVip = Boolean(payload.is_vip || payload.order_area === 'vip');
     const preview = calculateOrderPreview(
       rawSubtotal,
       discountRules,
-      settings?.tax_percentage ?? 0
+      settings?.tax_percentage ?? 0,
+      {
+        isVip,
+        vipDiscountPercentage: settings?.vip_discount_percentage,
+        vipTaxPercentage: settings?.vip_tax_percentage,
+        vipServiceChargePercentage: settings?.vip_room_service_charge_percentage,
+      }
     );
 
     // 3. Validate payment
@@ -87,6 +96,8 @@ export const transactionService = {
     // 5. Construct order entity payload
     const orderPayload = {
       order_type: payload.order_type,
+      order_area: isVip ? ('vip' as const) : ('regular' as const),
+      is_vip: isVip,
       customer_name:
         payload.customer_name?.trim() ||
         (payload.order_type === 'dine_in' ? 'Dine In' : 'Take Away'),
@@ -97,6 +108,9 @@ export const transactionService = {
       discount: preview.discount,
       discount_name: preview.discountName,
       tax: preview.tax,
+      tax_percentage: preview.taxPercentage,
+      service_charge: preview.serviceCharge,
+      service_charge_percentage: preview.serviceChargePercentage,
       total_amount: preview.totalAmount,
       payment: {
         id: `pay-${Date.now()}-${Math.floor(Math.random() * 1000)}`,

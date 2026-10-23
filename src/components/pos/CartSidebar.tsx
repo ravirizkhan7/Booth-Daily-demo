@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { usePOS } from '../../hooks/usePOS';
 import { formatRupiah } from '../../utils/formatters';
 import { calculateOrderPreview } from '../../utils/orderCalculation';
-import { ShoppingBag, Trash2, Plus, Minus, Edit3, ArrowRight, User, Utensils, ShoppingBag as BagIcon, Check, X, Lock, DoorOpen } from 'lucide-react';
+import { ShoppingBag, Trash2, Plus, Minus, Edit3, ArrowRight, User, Utensils, ShoppingBag as BagIcon, Check, X, Lock, DoorOpen, Crown } from 'lucide-react';
 
 interface CartSidebarProps {
   onClose?: () => void;
@@ -13,6 +13,8 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
     cart,
     orderType,
     setOrderType,
+    orderArea,
+    setOrderArea,
     customerName,
     setCustomerName,
     updateCartQty,
@@ -34,8 +36,15 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
     discountName,
     tax,
     taxPercentage,
+    serviceCharge,
+    serviceChargePercentage,
     totalAmount,
-  } = calculateOrderPreview(rawSubtotal, discountRules, settings?.tax_percentage ?? 0);
+  } = calculateOrderPreview(rawSubtotal, discountRules, settings?.tax_percentage ?? 0, {
+    isVip: orderArea === 'vip',
+    vipDiscountPercentage: settings?.vip_discount_percentage,
+    vipTaxPercentage: settings?.vip_tax_percentage,
+    vipServiceChargePercentage: settings?.vip_room_service_charge_percentage,
+  });
 
   const quickNoteOptions = ['Less Sugar', 'No Ice', 'Extra Shot', 'Extra Cheese', 'Less Ice', 'Warm'];
 
@@ -126,6 +135,40 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
           </button>
         </div>
 
+        {/* Area Pesanan: Umum vs Ruang VIP Switch */}
+        <div className="flex items-center justify-between text-xs font-bold text-stone-600 dark:text-stone-400 px-1 pt-0.5">
+          <span className="flex items-center gap-1">
+            <Crown className="w-3.5 h-3.5 text-amber-500" />
+            Area Pesanan:
+          </span>
+          <div className="flex items-center gap-1 bg-stone-200/80 dark:bg-stone-900 p-0.5 rounded-xl">
+            <button
+              type="button"
+              id="order-area-regular-btn"
+              onClick={() => setOrderArea('regular')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                orderArea === 'regular'
+                  ? 'bg-[#3B2A1F] text-[#F7F5F2] shadow-xs'
+                  : 'text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100'
+              }`}
+            >
+              Umum
+            </button>
+            <button
+              type="button"
+              id="order-area-vip-btn"
+              onClick={() => setOrderArea('vip')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
+                orderArea === 'vip'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-stone-600 dark:text-stone-400 hover:text-amber-600'
+              }`}
+            >
+              Ruang VIP
+            </button>
+          </div>
+        </div>
+
         {/* Customer / Table Input */}
         <div className="relative">
           <User className="w-4 h-4 absolute left-3 top-2.5 text-stone-400" />
@@ -133,7 +176,13 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
             type="text"
             value={customerName}
             onChange={e => setCustomerName(e.target.value)}
-            placeholder={orderType === 'dine_in' ? 'Nomor Meja / Nama Pelanggan' : 'Nama Pelanggan (Take Away)'}
+            placeholder={
+              orderArea === 'vip'
+                ? 'Nomor Meja VIP / Nama Tamu VIP'
+                : orderType === 'dine_in'
+                  ? 'Nomor Meja / Nama Pelanggan'
+                  : 'Nama Pelanggan (Take Away)'
+            }
             className="w-full pl-9 pr-3 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-[#171514] border border-stone-300 dark:border-stone-700 focus:outline-none focus:border-[#C68B59] text-stone-900 dark:text-stone-100"
           />
         </div>
@@ -299,6 +348,16 @@ export const CartSidebar: React.FC<CartSidebarProps> = ({ onClose }) => {
             <span>Pajak ({taxPercentage}%)</span>
             <span className="font-bold text-stone-800 dark:text-stone-200">{formatRupiah(tax)}</span>
           </div>
+
+          {orderArea === 'vip' && serviceCharge > 0 && (
+            <div className="flex justify-between text-stone-500">
+              <span className="flex items-center gap-1">
+                <Crown className="w-3 h-3 text-amber-500" />
+                <span>Biaya Layanan VIP ({serviceChargePercentage}%)</span>
+              </span>
+              <span className="font-bold text-stone-800 dark:text-stone-200">{formatRupiah(serviceCharge)}</span>
+            </div>
+          )}
 
           <div className="flex justify-between text-base font-black text-stone-900 dark:text-stone-100 pt-2 border-t border-dashed border-stone-300 dark:border-stone-700">
             <span>TOTAL</span>

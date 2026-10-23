@@ -12,4 +12,9 @@ export const initialSettings: Settings = {
   currency_symbol: 'Rp',
   operational_day_cutoff_time: '04:00',
   receipt_paper_size: '80mm',
+  report_signer_name: '',
+  report_city: '',
+  vip_discount_percentage: 0,
+  vip_tax_percentage: null,
+  vip_room_service_charge_percentage: 0,
 };

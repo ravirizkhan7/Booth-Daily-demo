@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Product, Recipe, Stock, OrderType } from '../../types';
+import { Product, Recipe, Stock, OrderType, OrderArea } from '../../types';
 import { getProductStockInfo } from '../../utils/stockUtils';
 import { ToastType } from './usePOSToast';
 
@@ -19,6 +19,7 @@ export interface UsePOSCartProps {
 export const usePOSCart = ({ recipes, stocks, isShiftActive = false, showToast }: UsePOSCartProps) => {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderType, setOrderType] = useState<OrderType>('dine_in');
+  const [orderArea, setOrderArea] = useState<OrderArea>('regular');
   const [customerName, setCustomerName] = useState<string>('');
 
   const addToCart = useCallback((product: Product, quantityToAdd: number = 1) => {
@@ -92,6 +93,7 @@ export const usePOSCart = ({ recipes, stocks, isShiftActive = false, showToast }
   const clearCart = useCallback(() => {
     setCart([]);
     setCustomerName('');
+    setOrderArea('regular');
   }, []);
 
   return {
@@ -99,6 +101,8 @@ export const usePOSCart = ({ recipes, stocks, isShiftActive = false, showToast }
     setCart,
     orderType,
     setOrderType,
+    orderArea,
+    setOrderArea,
     customerName,
     setCustomerName,
     addToCart,
