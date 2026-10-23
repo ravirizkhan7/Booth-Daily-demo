@@ -10,6 +10,7 @@ import {
   DiscountRule,
   Settings,
   Shift,
+  ShiftExpense,
 } from '../types';
 
 export interface MockStoreState {
@@ -24,5 +25,6 @@ export interface MockStoreState {
   discountRules: DiscountRule[];
   settings: Settings;
   shifts: Shift[];
+  expenses: ShiftExpense[];
   activeShiftId: string | null;
 }

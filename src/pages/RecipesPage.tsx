@@ -80,7 +80,8 @@ export const RecipesPage: React.FC = () => {
           stock_id: stocks[0].id,
           stock_name: stocks[0].name,
           amount: 1,
-          unit: stocks[0].unit
+          unit: stocks[0].unit,
+          waste_percentage: 0
         }
       ] : [],
       steps: [
@@ -123,7 +124,8 @@ export const RecipesPage: React.FC = () => {
       stock_id: firstStock.id,
       stock_name: firstStock.name,
       amount: 1,
-      unit: firstStock.unit
+      unit: firstStock.unit,
+      waste_percentage: 0
     };
     setFormData(prev => ({ ...prev, ingredients: [...prev.ingredients, newItem] }));
   };
@@ -206,23 +208,37 @@ export const RecipesPage: React.FC = () => {
       return;
     }
 
-    // image_url tidak perlu dikirim di sini — foto baru (kalau ada)
-    // dikirim terpisah lewat imageFile setelah data resep tersimpan.
-    await saveRecipeData(
-      {
-        product_id: formData.product_id,
-        prep_time_minutes: Number(formData.prep_time_minutes) || 3,
-        image_url: formData.image_url,
-        description: formData.description,
-        barista_tips: formData.barista_tips,
-        ingredients: formData.ingredients,
-        steps: formData.steps
-      },
-      editingRecipe?.id,
-      imageFile
-    );
+    for (const ing of formData.ingredients) {
+      if (ing.waste_percentage !== undefined && ing.waste_percentage !== null) {
+        const w = Number(ing.waste_percentage);
+        if (isNaN(w) || w < 0 || w >= 100) {
+          setFormError('Persentase susut (waste) harus berada pada rentang 0% <= waste < 100%');
+          return;
+        }
+      }
+    }
 
-    setIsModalOpen(false);
+    try {
+      // image_url tidak perlu dikirim di sini — foto baru (kalau ada)
+      // dikirim terpisah lewat imageFile setelah data resep tersimpan.
+      await saveRecipeData(
+        {
+          product_id: formData.product_id,
+          prep_time_minutes: Number(formData.prep_time_minutes) || 3,
+          image_url: formData.image_url,
+          description: formData.description,
+          barista_tips: formData.barista_tips,
+          ingredients: formData.ingredients,
+          steps: formData.steps
+        },
+        editingRecipe?.id,
+        imageFile
+      );
+
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setFormError(err.message || 'Gagal menyimpan resep');
+    }
   };
 
   return (
@@ -323,7 +339,7 @@ export const RecipesPage: React.FC = () => {
                       <div className="flex flex-wrap gap-1.5">
                         {recipe.ingredients.map(ing => (
                           <span key={ing.id} className="px-2.5 py-1 rounded-xl bg-stone-100 dark:bg-[#25221F] text-stone-800 dark:text-stone-200 font-bold text-[10px] border border-stone-200 dark:border-stone-800">
-                            {ing.stock_name} ({ing.amount} {ing.unit})
+                            {ing.stock_name} ({ing.amount} {ing.unit}{ing.waste_percentage ? ` +${ing.waste_percentage}% susut` : ''})
                           </span>
                         ))}
                       </div>
@@ -469,7 +485,7 @@ export const RecipesPage: React.FC = () => {
                 ) : (
                   formData.ingredients.map((ing, idx) => (
                     <div key={ing.id || idx} className="flex flex-col sm:grid sm:grid-cols-12 gap-2 items-stretch sm:items-center bg-white dark:bg-[#1E1C1A] p-2.5 rounded-xl border border-stone-200 dark:border-stone-800">
-                      <div className="flex-1 sm:col-span-5">
+                      <div className="flex-1 sm:col-span-4">
                         <label className="block sm:hidden text-[10px] font-bold text-stone-400 mb-0.5">Pilih Bahan Baku</label>
                         <select
                           value={ing.stock_id}
@@ -497,7 +513,7 @@ export const RecipesPage: React.FC = () => {
                           />
                         </div>
 
-                        <div className="flex-1 sm:col-span-3">
+                        <div className="w-16 sm:col-span-2">
                           <label className="block sm:hidden text-[10px] font-bold text-stone-400 mb-0.5">Satuan</label>
                           <input
                             type="text"
@@ -506,6 +522,22 @@ export const RecipesPage: React.FC = () => {
                             value={ing.unit}
                             title="Satuan otomatis mengikuti satuan dasar bahan baku"
                             className="w-full px-2.5 py-1.5 rounded-lg bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700 font-bold text-stone-600 dark:text-stone-300 text-[11px] cursor-not-allowed"
+                          />
+                        </div>
+
+                        <div className="flex-1 sm:col-span-2">
+                          <label className="block sm:hidden text-[10px] font-bold text-stone-400 mb-0.5">Susut (%)</label>
+                          <NumberInput
+                            type="number"
+                            step="any"
+                            min={0}
+                            max={99.9}
+                            allowDecimals={true}
+                            value={ing.waste_percentage ?? 0}
+                            onChange={val => handleIngredientChange(idx, 'waste_percentage', val)}
+                            placeholder="0%"
+                            title="Persentase susut/waste bahan (0% - 99.9%)"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
                           />
                         </div>
 

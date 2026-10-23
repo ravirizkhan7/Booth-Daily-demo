@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useCallback, useRef, useState, ReactNode, useMemo } from 'react';
-import { Product, Category, Recipe, Order, Stock, Purchase, User, OrderType, PaymentMethod, Settings, StockHistory, DiscountRule, Shift } from '../types';
+import { Product, Category, Recipe, Order, Stock, Purchase, User, OrderType, PaymentMethod, Settings, StockHistory, DiscountRule, Shift, ShiftExpense, ShiftExpenseCategory } from '../types';
 import { productService } from '../services/productService';
 import { recipeService } from '../services/recipeService';
 import { userService } from '../services/userService';
@@ -54,6 +54,8 @@ interface POSContextType {
   // Shift & Reconciliation
   shifts: Shift[];
   activeShift: Shift | null;
+  shiftExpenses: ShiftExpense[];
+  activeExpenses: ShiftExpense[];
   isShiftActive: boolean;
   isOpenShiftModalOpen: boolean;
   openOpenShiftModal: () => void;
@@ -65,6 +67,9 @@ interface POSContextType {
   closeShift: (payload: { actual_cash_end: number; actual_qris_end: number | null; actual_refund_total: number | null; cash_difference_reason?: string; qris_difference_reason?: string; notes?: string; pin: string }) => Promise<{ success: boolean; message: string; shift?: Shift }>;
   reviewShift: (payload: { shift_id: string; action: 'approved_variance' | 'correction_requested'; notes?: string; pin: string }) => Promise<{ success: boolean; message: string; shift?: Shift }>;
   correctShift: (payload: { shift_id: string; actual_cash_end: number; actual_qris_end: number | null; actual_refund_total?: number | null; cash_difference_reason?: string; qris_difference_reason?: string; correction_notes?: string; pin: string }) => Promise<{ success: boolean; message: string; shift?: Shift }>;
+  recordShiftExpense: (payload: { amount: number; category: ShiftExpenseCategory; description: string; receipt_number?: string; pin: string }) => Promise<{ success: boolean; message: string; expense?: ShiftExpense }>;
+  cancelShiftExpense: (payload: { expense_id: string; cancellation_reason: string; pin: string }) => Promise<{ success: boolean; message: string; expense?: ShiftExpense }>;
+  replaceShiftExpense: (payload: { old_expense_id: string; new_expense: { amount: number; category: ShiftExpenseCategory; description: string; receipt_number?: string }; cancellation_reason: string; pin: string }) => Promise<{ success: boolean; message: string; expense?: ShiftExpense }>;
   refreshShifts: () => Promise<void>;
 
   // POS Workspace state
@@ -517,6 +522,8 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const {
     shifts,
     activeShift,
+    shiftExpenses,
+    activeExpenses,
     isShiftActive,
     isOpenShiftModalOpen,
     openOpenShiftModal,
@@ -528,6 +535,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     closeShift,
     reviewShift,
     correctShift,
+    recordShiftExpense,
+    cancelShiftExpense,
+    replaceShiftExpense,
     refreshShifts,
   } = shiftDomain;
 
@@ -1184,6 +1194,8 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         refreshData,
         shifts,
         activeShift,
+        shiftExpenses,
+        activeExpenses,
         isShiftActive,
         isOpenShiftModalOpen,
         openOpenShiftModal,
@@ -1195,6 +1207,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         closeShift,
         reviewShift,
         correctShift,
+        recordShiftExpense,
+        cancelShiftExpense,
+        replaceShiftExpense,
         refreshShifts,
         toast,
         showToast,

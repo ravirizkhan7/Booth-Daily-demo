@@ -151,6 +151,14 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
     const r = push([cs('Periode Laporan', S.mKey), cs(rd.periodLabel, S.mVal), cs('', S.mVal), cs('', S.mVal), cs('', S.mVal)]);
     span(r, 1, NC - 1);
   }
+  if (rd.filterUserId && rd.filterUserId !== 'all') {
+    const roleSuffix = rd.filterUserRole
+      ? ` (${rd.filterUserRole.toLowerCase() === 'owner' ? 'Owner' : rd.filterUserRole.toLowerCase() === 'karyawan' ? 'Karyawan' : rd.filterUserRole})`
+      : '';
+    const userDisplay = `${rd.filterUserName || rd.filterUserId}${roleSuffix}`;
+    const r = push([cs('Filter Kasir / User', S.mKey), cs(userDisplay, S.mVal), cs('', S.mVal), cs('', S.mVal), cs('', S.mVal)]);
+    span(r, 1, NC - 1);
+  }
   {
     const r = push([cs('Tanggal Cetak', S.mKey), cs(printDate, S.mVal), cs('', S.mVal), cs('', S.mVal), cs('', S.mVal)]);
     span(r, 1, NC - 1);
@@ -161,10 +169,26 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
   fullSpan(push([cs('  RINGKASAN EKSEKUTIF — KINERJA KEUANGAN PERIODE INI', S.sec), ...fill(S.sec)]));
   push([cs('INDIKATOR KEUANGAN', S.thL), cs('NOMINAL (Rp)', S.thR), cs('JUMLAH / SATUAN', S.thC), cs('KETERANGAN', S.thL), cs('INFO TAMBAHAN', S.thL)]);
 
+  let hppStatusNote = 'Snapshot Riil Transaksi (WAC + Susut)';
+  let hppCategoryLabel = 'Snapshot Riil';
+  if (rd.totalOrdersCount === 0 && rd.periodRefundOrders.length === 0) {
+    hppStatusNote = 'Tidak ada transaksi pada periode ini';
+    hppCategoryLabel = '-';
+  } else if (rd.hasLegacyEstimatedHPP && rd.hppSnapshotOrdersCount === 0 && rd.hppPartialSnapshotOrdersCount === 0) {
+    hppStatusNote = 'Estimasi Historis Legacy (Resep / Modal Master / 40%)';
+    hppCategoryLabel = 'Estimasi Legacy';
+  } else if (rd.hasLegacyEstimatedHPP || rd.hasPartialSnapshotHPP) {
+    hppStatusNote = `Data Campuran (${rd.hppSnapshotOrdersCount} Riil, ${rd.hppPartialSnapshotOrdersCount} Parsial, ${rd.hppLegacyEstimateOrdersCount} Estimasi)`;
+    hppCategoryLabel = 'Campuran';
+  } else {
+    hppStatusNote = `Snapshot Riil Transaksi (${rd.hppSnapshotOrdersCount} Nota Ber-snapshot WAC + Susut)`;
+    hppCategoryLabel = 'Snapshot Riil';
+  }
+
   const kpis: [string, number, string, string, string][] = [
     ['Total Penjualan (Omzet)', rd.totalSales, `${rd.totalOrdersCount} Transaksi`, 'Total penerimaan periode ini', `AOV Rp ${rd.avgOrderValue.toLocaleString('id-ID')}`],
     ['Total Pembelian (Restok)', rd.totalPurchases, `${rd.totalPurchasesCount} Nota`, 'Pengeluaran bahan baku periode ini', 'Hanya periode aktif'],
-    ['Estimasi HPP Menu', rd.totalEstimatedHPP, 'Estimasi', 'Biaya bahan untuk menu terjual', 'Resep → cost_price → estimasi 40%'],
+    ['Estimasi HPP Menu', rd.totalEstimatedHPP, hppCategoryLabel, 'Biaya modal bahan menu terjual', hppStatusNote],
     ['Estimasi Laba Kotor', rd.estimatedGrossProfit, `Margin ${rd.grossProfitMarginPercent}%`, 'Penjualan dikurangi Estimasi HPP', 'Bukan laba bersih'],
     ['Rata-rata Nilai Struk (AOV)', rd.avgOrderValue, 'Per Transaksi', `Rata-rata dari ${rd.totalOrdersCount} transaksi`, ''],
   ];
@@ -275,7 +299,7 @@ function buildSummarySheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
 // SHEET 2 — DETAIL PENJUALAN
 // ═══════════════════════════════════════════════════════════════════════════════
 function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
-  const NC = 10;
+  const NC = 13;
   const rows: XLSX.CellObject[][] = [];
   const merges: XLSX.Range[] = [];
   let ri = -1;
@@ -295,14 +319,35 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
     cs('NO. PESANAN', S.thL), cs('TANGGAL & WAKTU', S.thL), cs('KASIR', S.thL),
     cs('TIPE', S.thC), cs('PEMBAYARAN', S.thC), cs('STATUS', S.thC),
     cs('SUBTOTAL (Rp)', S.thR), cs('DISKON (Rp)', S.thR), cs('PAJAK (Rp)', S.thR), cs('TOTAL OMZET (Rp)', S.thR),
+    cs('HPP (Rp)', S.thR), cs('LABA KOTOR (Rp)', S.thR), cs('KUALITAS HPP', S.thC),
   ]);
 
   // ── DATA ROWS ─────────────────────────────────────────────────────────────────
-  if (rd.transactionDetailOrders.length === 0) {
+  const details = rd.transactionDetails || rd.transactionDetailOrders.map(o => {
+    const isRefunded = o.payment?.status === 'refunded';
+    const omzet = isRefunded ? 0 : (Number(o.total_amount) || 0);
+    const hpp = typeof o.total_hpp === 'number' && o.total_hpp >= 0 ? o.total_hpp : 0;
+    const grossProfit = omzet - hpp;
+    const isLegacy = o.hpp_source === 'legacy_estimate' || typeof o.total_hpp !== 'number';
+    const isPartial = o.hpp_source === 'partial_snapshot';
+    const hppCategoryLabel = isLegacy ? 'Estimasi Legacy' : (isPartial ? 'Partial Snapshot' : 'Snapshot Riil');
+    return {
+      order: o,
+      omzet,
+      hpp,
+      grossProfit,
+      marginPercent: omzet > 0 ? Math.round((grossProfit / omzet) * 1000) / 10 : 0,
+      hppCategory: (isLegacy ? 'legacy_estimate' : (isPartial ? 'partial_snapshot' : 'snapshot_riil')) as any,
+      hppCategoryLabel,
+    };
+  });
+
+  if (details.length === 0) {
     const r = push([cs('Belum ada transaksi penjualan pada periode ini.', S.disc), ...Array(NC - 1).fill(bl())]);
     fullSpan(r);
   } else {
-    rd.transactionDetailOrders.forEach((o, i) => {
+    details.forEach((d, i) => {
+      const o = d.order;
       const a = i % 2 === 1;
       const isRefunded = o.payment?.status === 'refunded';
       push([
@@ -315,7 +360,10 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
         cn(Number(o.subtotal) || Number(o.total_amount) || 0, a ? S.tdAR : S.tdR),
         cn(Number(o.discount) || 0, a ? S.tdAR : S.tdR),
         cn(Number(o.tax) || 0, a ? S.tdAR : S.tdR),
-        cn(isRefunded ? 0 : (Number(o.total_amount) || 0), a ? S.tdAR : S.tdR),
+        cn(d.omzet, a ? S.tdAR : S.tdR),
+        cn(d.hpp, a ? S.tdAR : S.tdR),
+        cn(d.grossProfit, a ? S.tdAR : S.tdR),
+        cs(d.hppCategoryLabel, a ? S.tdAC : S.tdC),
       ]);
     });
   }
@@ -326,6 +374,9 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
       cs(`TOTAL PENJUALAN PERIODE — ${rd.totalOrdersCount} Transaksi Selesai`, S.totL),
       cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL), cs('', S.totL),
       cn(rd.totalSales, S.totR),
+      cn(rd.totalEstimatedHPP, S.totR),
+      cn(rd.estimatedGrossProfit, S.totR),
+      cs('', S.totC),
     ]);
     merges.push({ s: { r, c: 0 }, e: { r, c: 8 } });
   }
@@ -333,7 +384,21 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
   // ── WORKSHEET SETUP ───────────────────────────────────────────────────────────
   const ws = toWS(rows);
   ws['!merges'] = merges;
-  ws['!cols'] = [{ wch: 21 }, { wch: 22 }, { wch: 16 }, { wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 16 }, { wch: 13 }, { wch: 13 }, { wch: 18 }];
+  ws['!cols'] = [
+    { wch: 21 }, // NO. PESANAN
+    { wch: 22 }, // TANGGAL & WAKTU
+    { wch: 16 }, // KASIR
+    { wch: 12 }, // TIPE
+    { wch: 13 }, // PEMBAYARAN
+    { wch: 13 }, // STATUS
+    { wch: 15 }, // SUBTOTAL
+    { wch: 13 }, // DISKON
+    { wch: 13 }, // PAJAK
+    { wch: 17 }, // TOTAL OMZET
+    { wch: 17 }, // HPP
+    { wch: 17 }, // LABA KOTOR
+    { wch: 20 }, // KUALITAS HPP
+  ];
   ws['!rows'] = rows.map((_, i) => ({ hpx: i === 0 ? 32 : i === 1 ? 22 : 20 }));
   ws['!views'] = [{ state: 'frozen', xSplit: 0, ySplit: headerRow + 1 }];
   ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: headerRow, c: 0 }, e: { r: rows.length - 1, c: NC - 1 } }) };

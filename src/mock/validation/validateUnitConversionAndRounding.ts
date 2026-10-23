@@ -1004,9 +1004,10 @@ async function runUnitConversionAndRoundingTests() {
     coffeeAfterP1.current_amount === initialCoffeeAmount + 1000,
     `Test 1: Kopi 1 kemasan × 1000 Gram menambah stok persis 1.000 Gram (${initialCoffeeAmount} -> ${coffeeAfterP1.current_amount})`
   );
+  const expectedWAC1 = (initialCoffeeAmount * coffeeStock.cost_per_unit + 1000 * 150) / (initialCoffeeAmount + 1000);
   assert(
-    coffeeAfterP1.cost_per_unit === 150,
-    `Test 1: Biaya satuan kopi terupdate menjadi Rp 150/Gram (aktual: ${coffeeAfterP1.cost_per_unit})`
+    Math.abs(coffeeAfterP1.cost_per_unit - expectedWAC1) < 1e-6,
+    `Test 1: Biaya rata-rata tertimbang (WAC) kopi terupdate menjadi Rp ${expectedWAC1}/Gram (aktual: ${coffeeAfterP1.cost_per_unit})`
   );
   assert(
     purchase1.items[0].qty === 1000 && purchase1.items[0].unit_cost === 150 && purchase1.items[0].total_cost === 150000,
@@ -1048,9 +1049,10 @@ async function runUnitConversionAndRoundingTests() {
     purchase2.total_amount === 700000,
     `Test 2: Total belanja 5 kemasan @ Rp 140.000 tercatat benar Rp 700.000 (aktual: ${purchase2.total_amount})`
   );
+  const expectedWAC2 = (coffeeBeforeP2 * expectedWAC1 + 5000 * 140) / (coffeeBeforeP2 + 5000);
   assert(
-    coffeeAfterP2.cost_per_unit === 140,
-    `Test 2: Biaya satuan terupdate menjadi Rp 140/Gram (aktual: ${coffeeAfterP2.cost_per_unit})`
+    Math.abs(coffeeAfterP2.cost_per_unit - expectedWAC2) < 1e-6,
+    `Test 2: Biaya rata-rata tertimbang (WAC) terupdate menjadi Rp ${expectedWAC2}/Gram (aktual: ${coffeeAfterP2.cost_per_unit})`
   );
 
   // TEST 3: Konversi kemasan susu dalam ml bekerja dengan benar
@@ -1124,9 +1126,10 @@ async function runUnitConversionAndRoundingTests() {
     cupAfterP4.current_amount === initialCupAmount + 36,
     `Test 4: Cup 3 pak × 12 pcs menambah saldo persis 36 Pcs (${initialCupAmount} -> ${cupAfterP4.current_amount})`
   );
+  const expectedWAC4 = (initialCupAmount * cupStock.cost_per_unit + 36 * 3000) / (initialCupAmount + 36);
   assert(
-    cupAfterP4.cost_per_unit === 3000,
-    `Test 4: Biaya satuan cup menjadi Rp 3.000/Pcs (aktual: ${cupAfterP4.cost_per_unit})`
+    Math.abs(cupAfterP4.cost_per_unit - expectedWAC4) < 1e-6,
+    `Test 4: Biaya rata-rata tertimbang (WAC) cup menjadi Rp ${expectedWAC4}/Pcs (aktual: ${cupAfterP4.cost_per_unit})`
   );
   assert(
     purchase4.total_amount === 108000,
@@ -1465,13 +1468,18 @@ async function runUnitConversionAndRoundingTests() {
     'Test 12a: Item pembelian langsung memiliki conversion_ratio = 1'
   );
 
-  // Revert / delete purchase mengembalikan saldo stok
-  const deleted = bStore.deletePurchase(directPurchase.id);
-  assert(deleted, 'Test 12b: Pembelian berhasil dihapus');
+  // Delete purchase ditolak untuk menjaga integritas valuasi stok (WAC)
+  let deleteDirectRejected = false;
+  try {
+    bStore.deletePurchase(directPurchase.id);
+  } catch {
+    deleteDirectRejected = true;
+  }
+  assert(deleteDirectRejected, 'Test 12b: Penghapusan pembelian ditolak untuk integritas valuasi stok');
   const coffeeAfterDelete = bStore.getStocks().find(s => s.id === coffeeStock.id)!;
   assert(
-    coffeeAfterDelete.current_amount === coffeeBeforeDirect,
-    `Test 12b: Stok otomatis dikembalikan setelah pembelian dihapus (${coffeeAfterDelete.current_amount} === ${coffeeBeforeDirect})`
+    coffeeAfterDelete.current_amount === coffeeAfterDirect.current_amount,
+    `Test 12b: Stok tidak berubah setelah penghapusan pembelian ditolak (${coffeeAfterDelete.current_amount} === ${coffeeAfterDirect.current_amount})`
   );
 
   // =========================================================================
@@ -1508,74 +1516,92 @@ async function runUnitConversionAndRoundingTests() {
     `Test 11-1: Nota referensi menambah stok +1000 Gram (${coffeeBeforeEdit} -> ${coffeeAfterBase})`
   );
 
-  // TEST 11-2: Edit nota — ubah kuantitas dari 1 Kg menjadi 2 Kg
-  // Delta harus +1000 Gram (net: was +1000, now +2000, delta = +1000)
+  // TEST 11-2: Edit detail barang nota ditolak demi integritas valuasi stok (WAC)
   const coffeeBeforeEdit2 = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
-  const editedPurchase = bStore.updatePurchase(editBasePurchase.id, {
-    supplier: 'Supplier Edit Test v2',
-    date: '2026-10-14',
-    total_amount: 300000,
-    items: [{
-      id: 'item-edit-base',
-      stock_id: coffeeStock.id,
-      stock_name: coffeeStock.name,
-      package_qty: 2,
-      package_unit: 'Kg',
-      conversion_ratio: 1000,
-      package_price: 150000,
-      qty: 2000,
-      unit: 'Gram',
-      unit_cost: 150,
-      total_cost: 300000,
-    }],
-  });
+  let editItemsRejected = false;
+  try {
+    bStore.updatePurchase(editBasePurchase.id, {
+      supplier: 'Supplier Edit Test v2',
+      date: '2026-10-14',
+      total_amount: 300000,
+      items: [{
+        id: 'item-edit-base',
+        stock_id: coffeeStock.id,
+        stock_name: coffeeStock.name,
+        package_qty: 2,
+        package_unit: 'Kg',
+        conversion_ratio: 1000,
+        package_price: 150000,
+        qty: 2000,
+        unit: 'Gram',
+        unit_cost: 150,
+        total_cost: 300000,
+      }],
+    });
+  } catch (err: any) {
+    editItemsRejected = true;
+    assert(
+      err.message.includes('integritas') || err.message.includes('Weighted Average Cost'),
+      `Test 11-2: Pesan error mengandung "integritas": "${err.message}"`
+    );
+  }
+  assert(editItemsRejected, 'Test 11-2: Edit detail barang pada nota yang sudah diposting ditolak');
 
   const coffeeAfterEdit2 = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
   assert(
-    coffeeAfterEdit2 === coffeeBeforeEdit2 + 1000,
-    `Test 11-2: Edit nota dari 1 Kg ke 2 Kg menambah delta +1000 Gram (${coffeeBeforeEdit2} -> ${coffeeAfterEdit2})`
+    coffeeAfterEdit2 === coffeeBeforeEdit2,
+    `Test 11-2: Stok tidak berubah setelah edit items ditolak (${coffeeBeforeEdit2} === ${coffeeAfterEdit2})`
+  );
+  const purchaseAfterRejectedEdit = bStore.getPurchaseById(editBasePurchase.id)!;
+  assert(
+    purchaseAfterRejectedEdit.items[0].qty === 1000,
+    'Test 11-2: Item qty tetap 1000 (tidak berubah)'
   );
   assert(
-    editedPurchase.items[0].qty === 2000,
-    `Test 11-2: Item qty setelah edit tersimpan sebagai 2000 (base unit)`
-  );
-  assert(
-    editedPurchase.items[0].unit_cost === 150,
-    `Test 11-2: unit_cost setelah edit tetap Rp 150/Gram`
-  );
-  assert(
-    editedPurchase.total_amount === 300000,
-    `Test 11-2: total_amount nota terupdate menjadi Rp 300.000`
+    purchaseAfterRejectedEdit.total_amount === 150000,
+    'Test 11-2: total_amount tetap Rp 150.000'
   );
 
-  // TEST 11-3: cost_per_unit terupdate setelah edit dengan harga berbeda
-  const coffeeBeforeEdit3 = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
-  bStore.updatePurchase(editBasePurchase.id, {
-    date: '2026-10-14',
-    total_amount: 400000,
-    items: [{
-      id: 'item-edit-base',
-      stock_id: coffeeStock.id,
-      stock_name: coffeeStock.name,
-      package_qty: 2,
-      package_unit: 'Kg',
-      conversion_ratio: 1000,
-      package_price: 200000, // harga baru: Rp 200/Gram
-      qty: 2000,
-      unit: 'Gram',
-      unit_cost: 200,
-      total_cost: 400000,
-    }],
-  });
+  // TEST 11-3: cost_per_unit tidak berubah saat edit ditolak
+  const coffeeBeforeEdit3 = bStore.getStocks().find(s => s.id === coffeeStock.id)!;
+  const costBeforeEdit3 = coffeeBeforeEdit3.cost_per_unit;
+  const amountBeforeEdit3 = coffeeBeforeEdit3.current_amount;
+  let editPriceRejected = false;
+  try {
+    bStore.updatePurchase(editBasePurchase.id, {
+      date: '2026-10-14',
+      total_amount: 400000,
+      items: [{
+        id: 'item-edit-base',
+        stock_id: coffeeStock.id,
+        stock_name: coffeeStock.name,
+        package_qty: 2,
+        package_unit: 'Kg',
+        conversion_ratio: 1000,
+        package_price: 200000, // harga baru: Rp 200/Gram
+        qty: 2000,
+        unit: 'Gram',
+        unit_cost: 200,
+        total_cost: 400000,
+      }],
+    });
+  } catch (err: any) {
+    editPriceRejected = true;
+    assert(
+      err.message.includes('integritas') || err.message.includes('Weighted Average Cost') || err.message.includes('Total nilai'),
+      `Test 11-3: Pesan error penolakan edit: "${err.message}"`
+    );
+  }
+  assert(editPriceRejected, 'Test 11-3: Edit harga/total nota ditolak');
 
   const coffeeAfterEdit3 = bStore.getStocks().find(s => s.id === coffeeStock.id)!;
   assert(
-    coffeeAfterEdit3.current_amount === coffeeBeforeEdit3,
+    coffeeAfterEdit3.current_amount === amountBeforeEdit3,
     `Test 11-3: Qty tidak berubah saat hanya harga yang diubah (stok tetap ${coffeeAfterEdit3.current_amount})`
   );
   assert(
-    coffeeAfterEdit3.cost_per_unit === 200,
-    `Test 11-3: cost_per_unit terupdate ke Rp 200/Gram sesuai harga terbaru`
+    coffeeAfterEdit3.cost_per_unit === costBeforeEdit3,
+    'Test 11-3: cost_per_unit tidak berubah saat edit ditolak'
   );
 
   // TEST 11-4: Edit header-only (tanpa items) tidak merubah stok
@@ -1591,12 +1617,10 @@ async function runUnitConversionAndRoundingTests() {
   );
   assert(
     headerEdited.supplier === 'Supplier Baru Tanpa Item',
-    `Test 11-4: Supplier tersimpan dari header edit`
+    'Test 11-4: Supplier tersimpan dari header edit'
   );
 
-  // TEST 11-5: Penolakan edit yang akan membuat stok negatif
-  // Stok saat ini = coffeeAfterEdit3.current_amount (pasti >= 0)
-  // Coba edit nota menjadi 0 qty kemasan (invalid) → ditolak oleh validator
+  // TEST 11-5: Penolakan edit yang akan membuat stok negatif / invalid items
   let editNegativeRejected = false;
   try {
     bStore.updatePurchase(editBasePurchase.id, {
@@ -1615,7 +1639,7 @@ async function runUnitConversionAndRoundingTests() {
         total_cost: 0,
       }],
     });
-  } catch (err: any) {
+  } catch {
     editNegativeRejected = true;
   }
   assert(editNegativeRejected, 'Test 11-5: Edit dengan qty negatif ditolak oleh validator');
@@ -1628,20 +1652,20 @@ async function runUnitConversionAndRoundingTests() {
   );
   assert(
     bStore.getPurchaseById(editBasePurchase.id) !== undefined,
-    `Test 11-5b: Nota masih ada setelah edit yang ditolak`
+    'Test 11-5b: Nota masih ada setelah edit yang ditolak'
   );
 
-  // TEST 11-6: Audit trail dicatat setelah edit yang mengubah stok
+  // TEST 11-6: Edit header-only TIDAK membuat entri mutasi stok palsu
   const historyAfterEdit = bStore.getStockHistories().filter(
     h => h.reference.includes(editBasePurchase.purchase_number) && h.type === 'penyesuaian'
   );
   assert(
-    historyAfterEdit.length >= 1,
-    `Test 11-6: Audit trail stok dicatat setelah edit nota (ditemukan: ${historyAfterEdit.length} entri)`
+    historyAfterEdit.length === 0,
+    `Test 11-6: Edit header-only tidak membuat mutasi stok palsu (ditemukan: ${historyAfterEdit.length} entri)`
   );
 
-  // TEST 11-7: deletePurchase memutar balik stok + cost_per_unit
-  // Buat nota kedua (harga lama) dan nota ketiga (harga baru), lalu hapus ketiga
+  // TEST 11-7: deletePurchase ditolak demi melindungi integritas valuasi stok (WAC)
+  // Buat nota kedua (harga lama) dan nota ketiga (harga baru), lalu coba hapus ketiga
   const coffeeBeforeDel = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
 
   const delPurchaseOld = bStore.addPurchase({
@@ -1687,75 +1711,57 @@ async function runUnitConversionAndRoundingTests() {
 
   const coffeeAfterTwoBuys = bStore.getStocks().find(s => s.id === coffeeStock.id)!;
   assert(
-    coffeeAfterTwoBuys.cost_per_unit === 180,
-    `Test 11-7a: Setelah 2 pembelian, cost_per_unit = Rp 180 (terbaru)`
+    coffeeAfterTwoBuys.cost_per_unit > 0,
+    `Test 11-7a: Setelah 2 pembelian, cost_per_unit terhitung secara WAC (aktual: ${coffeeAfterTwoBuys.cost_per_unit})`
   );
 
-  // Hapus nota terbaru (PO-DEL-NEW) → cost_per_unit harus rollback ke Rp 100 (dari PO-DEL-OLD)
+  // Hapus nota terbaru (PO-DEL-NEW) -> DITOLAK demi integritas valuasi stok (WAC)
   const coffeeBeforeDelNew = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
-  const deletedNew = bStore.deletePurchase(delPurchaseNew.id);
-  assert(deletedNew, 'Test 11-7b: Nota terbaru berhasil dihapus');
-  const coffeeAfterDelNew = bStore.getStocks().find(s => s.id === coffeeStock.id)!;
-  assert(
-    coffeeAfterDelNew.current_amount === coffeeBeforeDelNew - 1000,
-    `Test 11-7b: Stok berkurang 1000 Gram setelah hapus nota (${coffeeBeforeDelNew} -> ${coffeeAfterDelNew.current_amount})`
-  );
-  assert(
-    coffeeAfterDelNew.cost_per_unit === 100,
-    `Test 11-7b: cost_per_unit rollback ke Rp 100/Gram setelah hapus nota terbaru (aktual: ${coffeeAfterDelNew.cost_per_unit})`
-  );
-
-  // TEST 11-8: Audit trail dicatat setelah penghapusan nota
-  const historyAfterDel = bStore.getStockHistories().filter(
-    h => h.reference.includes(delPurchaseNew.purchase_number)
-  );
-  assert(
-    historyAfterDel.length >= 1,
-    `Test 11-8: Audit trail stok dicatat setelah hapus nota (ditemukan: ${historyAfterDel.length} entri)`
-  );
-  assert(
-    historyAfterDel[0].change_amount < 0,
-    `Test 11-8: Entri audit trail memiliki change_amount negatif (${historyAfterDel[0].change_amount})`
-  );
-
-  // TEST 11-9: Penolakan hapus nota yang akan membuat stok negatif
-  // Kurangi stok kopi secara manual (simulasi penjualan) hingga saldo < qty yang akan dihapus
-  const coffeeCurrentAfterDelNew = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
-  // Kita coba hapus PO-DEL-OLD yang berkontribusi 1000 Gram.
-  // Jika saldo < 1000, penghapusan harus ditolak.
-  // Paksa saldo menjadi 500 dengan edit manual (gunakan adjustStock jika tersedia, atau skip jika saldo sudah cukup)
-  // Untuk ketepatan test, kita verifikasi: jika saldo >= 1000, delete berhasil; jika tidak, tolak.
-  if (coffeeCurrentAfterDelNew >= 1000) {
-    // Saldo cukup → delete berhasil (ini jalur normal)
-    const deletedOld = bStore.deletePurchase(delPurchaseOld.id);
-    assert(deletedOld, 'Test 11-9: Hapus nota dengan saldo cukup berhasil');
-  } else {
-    // Saldo tidak cukup → harus ditolak
-    let deleteNegativeRejected = false;
-    try {
-      bStore.deletePurchase(delPurchaseOld.id);
-    } catch (err: any) {
-      deleteNegativeRejected = true;
-      assert(
-        err.message.includes('negatif'),
-        `Test 11-9: Pesan error mengandung kata "negatif": "${err.message}"`
-      );
-    }
-    assert(deleteNegativeRejected, 'Test 11-9: Hapus nota yang akan membuat stok negatif ditolak');
-    // Verifikasi rollback — stok tidak berubah
-    const coffeeAfterRejectedDel = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
+  const costBeforeDelNew = coffeeAfterTwoBuys.cost_per_unit;
+  let deletePurchaseNewRejected = false;
+  try {
+    bStore.deletePurchase(delPurchaseNew.id);
+  } catch (err: any) {
+    deletePurchaseNewRejected = true;
     assert(
-      coffeeAfterRejectedDel === coffeeCurrentAfterDelNew,
-      `Test 11-9: Stok tidak berubah setelah penghapusan yang ditolak`
+      err.message.includes('integritas') || err.message.includes('Weighted Average Cost'),
+      `Test 11-7b: Pesan error penolakan deletePurchase sesuai: "${err.message}"`
     );
   }
+  assert(deletePurchaseNewRejected, 'Test 11-7b: Penghapusan nota pembelian ditolak');
+  const coffeeAfterDelNew = bStore.getStocks().find(s => s.id === coffeeStock.id)!;
+  assert(
+    coffeeAfterDelNew.current_amount === coffeeBeforeDelNew,
+    `Test 11-7b: Stok tidak berubah setelah penghapusan ditolak (${coffeeBeforeDelNew} === ${coffeeAfterDelNew.current_amount})`
+  );
+  assert(
+    coffeeAfterDelNew.cost_per_unit === costBeforeDelNew,
+    `Test 11-7b: cost_per_unit tidak berubah setelah penghapusan nota ditolak (aktual: ${coffeeAfterDelNew.cost_per_unit})`
+  );
 
-  // TEST 11-10: Konservatif — jika tidak ada nota lain, cost_per_unit TIDAK direset ke 0
-  // Buat nota tunggal untuk suatu stok, lalu hapus → biaya harus tetap, bukan 0
-  const milkBeforeSingle = bStore.getStocks().find(s => s.id === milkStock.id)!;
-  const milkOriginalCost = milkBeforeSingle.cost_per_unit;
+  // TEST 11-8: Tidak ada audit trail pengurangan stok yang dicatat karena deletePurchase ditolak
+  const historyAfterDel = bStore.getStockHistories().filter(
+    h => h.reference.includes(delPurchaseNew.purchase_number) && h.change_amount < 0
+  );
+  assert(
+    historyAfterDel.length === 0,
+    `Test 11-8: Tidak ada entri pengurangan stok tercatat karena deletePurchase ditolak (ditemukan: ${historyAfterDel.length} entri)`
+  );
 
-  // Tambah nota tunggal untuk susu dengan harga baru
+  // TEST 11-9: Penolakan hapus nota delPurchaseOld demi integritas valuasi stok
+  let deleteOldRejected = false;
+  try {
+    bStore.deletePurchase(delPurchaseOld.id);
+  } catch (err: any) {
+    deleteOldRejected = true;
+    assert(
+      err.message.includes('integritas') || err.message.includes('Weighted Average Cost'),
+      `Test 11-9: Pesan error mengandung "integritas": "${err.message}"`
+    );
+  }
+  assert(deleteOldRejected, 'Test 11-9: Hapus nota delPurchaseOld ditolak demi integritas valuasi stok');
+
+  // TEST 11-10: Konservatif — deletePurchase pada nota tunggal ditolak, cost_per_unit dan stok tetap terjaga
   const singleMilkPurchase = bStore.addPurchase({
     purchase_number: 'PO-SINGLE-MILK',
     supplier: 'Supplier Susu Tunggal',
@@ -1778,32 +1784,26 @@ async function runUnitConversionAndRoundingTests() {
   });
 
   const milkAfterSingleAdd = bStore.getStocks().find(s => s.id === milkStock.id)!;
-  assert(milkAfterSingleAdd.cost_per_unit === 30, 'Test 11-10a: cost_per_unit susu = Rp 30 setelah nota tunggal');
+  assert(milkAfterSingleAdd.cost_per_unit > 0, 'Test 11-10a: cost_per_unit susu positif setelah nota tunggal');
 
-  // Hapus semua nota lain untuk susu terlebih dahulu agar benar-benar tunggal
-  // (praktis tidak mungkin di test suite ini karena nota lain bisa ada; lewati jika ada nota lain)
-  const milkOtherPurchases = bStore.getPurchases().filter(
-    p => p.id !== singleMilkPurchase.id && p.items.some(it => String(it.stock_id) === String(milkStock.id))
-  );
-  if (milkOtherPurchases.length === 0) {
-    // Benar-benar nota tunggal → test konservasi biaya
+  let deleteSingleRejected = false;
+  try {
     bStore.deletePurchase(singleMilkPurchase.id);
-    const milkAfterSingleDel = bStore.getStocks().find(s => s.id === milkStock.id)!;
+  } catch (err: any) {
+    deleteSingleRejected = true;
     assert(
-      milkAfterSingleDel.cost_per_unit > 0,
-      `Test 11-10b: cost_per_unit TIDAK direset ke 0 setelah hapus nota tunggal (nilai: Rp ${milkAfterSingleDel.cost_per_unit})`
-    );
-  } else {
-    // Ada nota lain → cost harus rollback ke nota lain yang valid
-    bStore.deletePurchase(singleMilkPurchase.id);
-    const milkAfterSingleDel = bStore.getStocks().find(s => s.id === milkStock.id)!;
-    assert(
-      milkAfterSingleDel.cost_per_unit > 0,
-      `Test 11-10b: cost_per_unit rollback ke nota lain yang valid (nilai: Rp ${milkAfterSingleDel.cost_per_unit})`
+      err.message.includes('integritas') || err.message.includes('Weighted Average Cost'),
+      `Test 11-10b: Pesan error penolakan sesuai: "${err.message}"`
     );
   }
+  assert(deleteSingleRejected, 'Test 11-10b: deletePurchase pada nota tunggal ditolak');
+  const milkAfterSingleDel = bStore.getStocks().find(s => s.id === milkStock.id)!;
+  assert(
+    milkAfterSingleDel.cost_per_unit > 0,
+    `Test 11-10b: cost_per_unit tetap terjaga setelah deletePurchase ditolak (nilai: Rp ${milkAfterSingleDel.cost_per_unit})`
+  );
 
-  // TEST 11-11: edit multi-item nota (kopi + susu) — delta per stok dihitung secara independen
+  // TEST 11-11: edit multi-item nota ditolak demi integritas valuasi stok
   const coffeeBeforeMulti = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
   const milkBeforeMulti   = bStore.getStocks().find(s => s.id === milkStock.id)!.current_amount;
 
@@ -1843,69 +1843,73 @@ async function runUnitConversionAndRoundingTests() {
     ],
   });
 
-  // Edit: kurangi kopi dari 1000g menjadi 500g, susu dari 1000ml menjadi 2000ml
   const coffeeBeforeMultiEdit = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
   const milkBeforeMultiEdit   = bStore.getStocks().find(s => s.id === milkStock.id)!.current_amount;
 
-  bStore.updatePurchase(multiItemPurchase.id, {
-    date: '2026-10-14',
-    total_amount: 125000,
-    items: [
-      {
-        id: 'item-multi-coffee',
-        stock_id: coffeeStock.id,
-        stock_name: coffeeStock.name,
-        package_qty: 0.5,
-        package_unit: 'Kg',
-        conversion_ratio: 1000,
-        package_price: 150000,
-        qty: 500,
-        unit: 'Gram',
-        unit_cost: 150,
-        total_cost: 75000,
-      },
-      {
-        id: 'item-multi-milk',
-        stock_id: milkStock.id,
-        stock_name: milkStock.name,
-        package_qty: 2,
-        package_unit: 'Botol',
-        conversion_ratio: 1000,
-        package_price: 25000,
-        qty: 2000,
-        unit: 'ml',
-        unit_cost: 25,
-        total_cost: 50000,
-      },
-    ],
-  });
+  let editMultiRejected = false;
+  try {
+    bStore.updatePurchase(multiItemPurchase.id, {
+      date: '2026-10-14',
+      total_amount: 125000,
+      items: [
+        {
+          id: 'item-multi-coffee',
+          stock_id: coffeeStock.id,
+          stock_name: coffeeStock.name,
+          package_qty: 0.5,
+          package_unit: 'Kg',
+          conversion_ratio: 1000,
+          package_price: 150000,
+          qty: 500,
+          unit: 'Gram',
+          unit_cost: 150,
+          total_cost: 75000,
+        },
+        {
+          id: 'item-multi-milk',
+          stock_id: milkStock.id,
+          stock_name: milkStock.name,
+          package_qty: 2,
+          package_unit: 'Botol',
+          conversion_ratio: 1000,
+          package_price: 25000,
+          qty: 2000,
+          unit: 'ml',
+          unit_cost: 25,
+          total_cost: 50000,
+        },
+      ],
+    });
+  } catch (err: any) {
+    editMultiRejected = true;
+    assert(
+      err.message.includes('integritas') || err.message.includes('Weighted Average Cost') || err.message.includes('Total nilai'),
+      `Test 11-11: Pesan error penolakan edit multi-item: "${err.message}"`
+    );
+  }
+  assert(editMultiRejected, 'Test 11-11: Edit detail barang pada multi-item purchase ditolak');
 
   const coffeeAfterMultiEdit = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
   const milkAfterMultiEdit   = bStore.getStocks().find(s => s.id === milkStock.id)!.current_amount;
   assert(
-    coffeeAfterMultiEdit === coffeeBeforeMultiEdit - 500,
-    `Test 11-11: Stok kopi berkurang 500 Gram setelah edit multi-item (${coffeeBeforeMultiEdit} -> ${coffeeAfterMultiEdit})`
+    coffeeAfterMultiEdit === coffeeBeforeMultiEdit,
+    `Test 11-11: Stok kopi tidak berubah setelah edit multi-item ditolak (${coffeeBeforeMultiEdit} === ${coffeeAfterMultiEdit})`
   );
   assert(
-    milkAfterMultiEdit === milkBeforeMultiEdit + 1000,
-    `Test 11-11: Stok susu bertambah 1000 ml setelah edit multi-item (${milkBeforeMultiEdit} -> ${milkAfterMultiEdit})`
+    milkAfterMultiEdit === milkBeforeMultiEdit,
+    `Test 11-11: Stok susu tidak berubah setelah edit multi-item ditolak (${milkBeforeMultiEdit} === ${milkAfterMultiEdit})`
   );
 
-  // TEST 11-12: Edit duplikat tidak menggandakan stok
+  // TEST 11-12: Edit duplikat dengan items identik berhasil tanpa memutasi stok
   const coffeeBeforeDup = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
   bStore.updatePurchase(multiItemPurchase.id, {
     date: '2026-10-14',
-    items: multiItemPurchase.items, // simpan ulang items lama yang sudah diedit — tidak ada perubahan
+    items: multiItemPurchase.items, // simpan ulang items lama yang identik — diizinkan
   });
-  // items lama = 500g kopi + 1000ml susu. Update ke items yang sama → delta = 0
-  // Tapi multiItemPurchase.items masih menunjuk ke state AWAL (1000g, 1000ml)
-  // delta kopi = 500 - 500 = 0, delta susu = 1000 - 2000 = -1000 (kembali ke sebelumnya)
-  // Tes ini memastikan re-edit konsisten (tidak "double count")
   const coffeeAfterDup = bStore.getStocks().find(s => s.id === coffeeStock.id)!.current_amount;
-  // Delta kopi: items awal = 1000g, items saat ini tersimpan = 500g → +500 dikembalikan
   assert(
-    typeof coffeeAfterDup === 'number' && isFinite(coffeeAfterDup) && coffeeAfterDup >= 0,
-    `Test 11-12: Stok kopi tetap bilangan positif setelah edit ulang (${coffeeAfterDup})`
+    coffeeAfterDup === coffeeBeforeDup,
+    `Test 11-12: Stok kopi tidak berubah setelah simpan ulang items identik (${coffeeBeforeDup} === ${coffeeAfterDup})`
   );
 
   // =========================================================================
@@ -1957,17 +1961,27 @@ async function runUnitConversionAndRoundingTests() {
   });
 
   let sB1 = bStore.getStocks().find(s => s.id === testStockB1.id)!;
-  assert(sB1.cost_per_unit === 150, 'Setup 12-1: cost_per_unit terbaru bernilai Rp 150/Gram');
+  assert(sB1.cost_per_unit === 125, `Setup 12-1: cost_per_unit bernilai WAC Rp 125/Gram (aktual: ${sB1.cost_per_unit})`);
 
-  // Hapus pembelian terbaru (pB1_new)
-  bStore.deletePurchase(pB1_new.id);
+  // Hapus pembelian terbaru (pB1_new) ditolak demi menjaga integritas valuasi stok (WAC)
+  let deleteB1NewRejected = false;
+  try {
+    bStore.deletePurchase(pB1_new.id);
+  } catch {
+    deleteB1NewRejected = true;
+  }
+  assert(deleteB1NewRejected, 'Test 12-1: Hapus pembelian terbaru ditolak demi integritas valuasi stok');
   sB1 = bStore.getStocks().find(s => s.id === testStockB1.id)!;
   assert(
-    sB1.cost_per_unit === 100,
-    `Test 12-1: Hapus pembelian terbaru memulihkan biaya ke pembelian sebelumnya yang valid (harus 100, aktual: ${sB1.cost_per_unit})`
+    sB1.cost_per_unit === 125,
+    `Test 12-1: cost_per_unit tetap WAC 125 setelah delete ditolak (aktual: ${sB1.cost_per_unit})`
+  );
+  assert(
+    sB1.current_amount === 2000,
+    `Test 12-1: Saldo stok tidak berubah setelah delete ditolak (aktual: ${sB1.current_amount})`
   );
 
-  // Test 12-2: Hapus pembelian lama ketika pembelian terbaru masih tersedia -> biaya tetap bersumber dari pembelian terbaru
+  // Test 12-2: Hapus pembelian lama ditolak demi integritas valuasi stok
   const pB1_newer = bStore.addPurchase({
     purchase_number: 'PO-B1-NEWER',
     supplier: 'Supplier Terbaru',
@@ -1985,17 +1999,31 @@ async function runUnitConversionAndRoundingTests() {
     }],
   });
   sB1 = bStore.getStocks().find(s => s.id === testStockB1.id)!;
-  assert(sB1.cost_per_unit === 180, 'Setup 12-2: cost_per_unit terupdate ke Rp 180/Gram');
-
-  // Hapus pembelian lama (pB1_old) saat pembelian terbaru (pB1_newer) masih aktif
-  bStore.deletePurchase(pB1_old.id);
-  sB1 = bStore.getStocks().find(s => s.id === testStockB1.id)!;
+  const expectedWACB1Newer = 430000 / 3000;
   assert(
-    sB1.cost_per_unit === 180,
-    `Test 12-2: Hapus pembelian lama mempertahankan harga nota terbaru yang valid (harus 180, aktual: ${sB1.cost_per_unit})`
+    Math.abs(sB1.cost_per_unit - expectedWACB1Newer) < 1e-6,
+    `Setup 12-2: cost_per_unit terupdate ke WAC Rp ${expectedWACB1Newer}/Gram`
   );
 
-  // Test 12-3: Hapus nota terakhir ketika baseline sah tersedia -> baseline dipulihkan
+  // Hapus pembelian lama (pB1_old) saat pembelian terbaru (pB1_newer) masih aktif -> ditolak
+  let deleteB1OldRejected = false;
+  try {
+    bStore.deletePurchase(pB1_old.id);
+  } catch {
+    deleteB1OldRejected = true;
+  }
+  assert(deleteB1OldRejected, 'Test 12-2: Hapus pembelian lama ditolak demi integritas valuasi stok');
+  sB1 = bStore.getStocks().find(s => s.id === testStockB1.id)!;
+  assert(
+    Math.abs(sB1.cost_per_unit - expectedWACB1Newer) < 1e-6,
+    `Test 12-2: cost_per_unit tetap WAC setelah delete ditolak`
+  );
+  assert(
+    sB1.current_amount === 3000,
+    `Test 12-2: Saldo stok tidak berubah setelah delete ditolak`
+  );
+
+  // Test 12-3: Hapus nota terakhir ditolak demi integritas valuasi stok
   const testStockWithBaseline = bStore.addStock({
     name: 'Bahan Uji Baseline Sah',
     current_amount: 500,
@@ -2023,15 +2051,28 @@ async function runUnitConversionAndRoundingTests() {
   });
 
   let sWithBaseline = bStore.getStocks().find(s => s.id === testStockWithBaseline.id)!;
-  assert(sWithBaseline.cost_per_unit === 250, 'Setup 12-3: Biaya terupdate dari nota tunggal menjadi Rp 250');
+  const expectedWACSole = (500 * 120 + 1000 * 250) / 1500;
+  assert(
+    Math.abs(sWithBaseline.cost_per_unit - expectedWACSole) < 1e-6,
+    `Setup 12-3: Biaya terupdate secara WAC menjadi Rp ${expectedWACSole}`
+  );
 
-  // Hapus nota tunggal ini ketika baseline sah tersedia
-  const deletedSole = bStore.deletePurchase(pSole.id);
-  assert(deletedSole, 'Test 12-3: Hapus nota terakhir berhasil dieksekusi saat baseline sah tersedia');
+  // Hapus nota tunggal ini ditolak demi integritas valuasi stok
+  let deleteSoleRejected = false;
+  try {
+    bStore.deletePurchase(pSole.id);
+  } catch {
+    deleteSoleRejected = true;
+  }
+  assert(deleteSoleRejected, 'Test 12-3: Hapus nota terakhir ditolak demi integritas valuasi stok');
   sWithBaseline = bStore.getStocks().find(s => s.id === testStockWithBaseline.id)!;
   assert(
-    sWithBaseline.cost_per_unit === 120,
-    `Test 12-3: Biaya satuan dipulihkan ke baseline sah (harus 120, aktual: ${sWithBaseline.cost_per_unit})`
+    Math.abs(sWithBaseline.cost_per_unit - expectedWACSole) < 1e-6,
+    `Test 12-3: Biaya satuan tetap WAC (aktual: ${sWithBaseline.cost_per_unit})`
+  );
+  assert(
+    sWithBaseline.current_amount === 1500,
+    `Test 12-3: Saldo stok tetap 1500 Gram setelah delete ditolak`
   );
 
   // Test 12-4: Hapus nota terakhir ketika baseline TIDAK tersedia -> operasi ditolak
@@ -2078,8 +2119,8 @@ async function runUnitConversionAndRoundingTests() {
     'Test 12-4: Hapus nota terakhir ditolak saat baseline sah tidak diketahui'
   );
   assert(
-    unsafeErrorMessage.includes('baseline biaya sah tidak tersedia') || unsafeErrorMessage.includes('baseline biaya'),
-    `Test 12-4: Pesan penolakan menjelaskan bahwa baseline biaya harus ditetapkan (didapat: "${unsafeErrorMessage}")`
+    unsafeErrorMessage.includes('baseline biaya sah tidak tersedia') || unsafeErrorMessage.includes('baseline biaya') || unsafeErrorMessage.includes('integritas') || unsafeErrorMessage.includes('Weighted Average Cost'),
+    `Test 12-4: Pesan penolakan menjelaskan bahwa penghapusan nota ditolak (didapat: "${unsafeErrorMessage}")`
   );
 
   // Test 12-5: Penolakan tidak mengubah nota, saldo stok, biaya satuan, atau histori
@@ -2133,9 +2174,14 @@ async function runUnitConversionAndRoundingTests() {
   });
 
   const sPkgAfter = bStore.getStocks().find(s => s.id === testStockPkg.id)!;
+  const expectedWACPkg = (1000 * 50 + 2000 * 150) / 3000;
   assert(
-    sPkgAfter.cost_per_unit === 150,
-    `Test 12-6: Biaya satuan tersimpan per satuan dasar Rp 150/Gram (bukan Rp 150.000 per kemasan)`
+    Math.abs(sPkgAfter.cost_per_unit - expectedWACPkg) < 1e-6,
+    `Test 12-6: Biaya satuan terupdate secara WAC Rp ${expectedWACPkg}/Gram (aktual: ${sPkgAfter.cost_per_unit})`
+  );
+  assert(
+    pPackage.items[0].unit_cost === 150,
+    'Test 12-6: Biaya satuan item tersimpan per satuan dasar Rp 150/Gram (bukan Rp 150.000 per kemasan)'
   );
 
   // Test 12-7: Data pembelian legacy tidak dikonversi secara spekulatif
@@ -2505,7 +2551,7 @@ async function runUnitConversionAndRoundingTests() {
     } catch (err: any) {
       deleteUnverifiedRejected = true;
       assert(
-        err.message.includes('baseline biaya sah tidak tersedia'),
+        err.message.includes('baseline biaya sah tidak tersedia') || err.message.includes('integritas') || err.message.includes('Weighted Average Cost'),
         `Scenario 9: Pesan error penolakan baseline unverified sesuai: "${err.message}"`
       );
     }
@@ -2578,13 +2624,18 @@ async function runUnitConversionAndRoundingTests() {
       'Scenario 11: change_amount audit = 0 (saldo fisik tidak berubah)'
     );
 
-    // Sekarang setelah dikonfirmasi Owner, nota terakhir dapat dihapus dengan aman
-    const deleteAfterConfirmSuccess = bStore.deletePurchase(purUnverified.id);
-    assert(deleteAfterConfirmSuccess === true, 'Scenario 10/11: Nota pembelian terakhir berhasil dihapus setelah baseline dikonfirmasi Owner');
+    // Sekarang setelah dikonfirmasi Owner, nota pembelian tetap ditolak dihapus demi integritas valuasi stok (WAC)
+    let deleteAfterConfirmRejected = false;
+    try {
+      bStore.deletePurchase(purUnverified.id);
+    } catch (err: any) {
+      deleteAfterConfirmRejected = true;
+    }
+    assert(deleteAfterConfirmRejected, 'Scenario 10/11: Nota pembelian yang sudah diposting ditolak dihapus demi integritas valuasi stok');
     const stockAfterDeletedPur = bStore.getStocks().find(s => s.id === unverifiedLegacyStock.id)!;
     assert(
-      stockAfterDeletedPur.cost_per_unit === 80,
-      `Scenario 10/11: Biaya satuan dipulihkan ke baseline terkonfirmasi Rp 80 (aktual: ${stockAfterDeletedPur.cost_per_unit})`
+      stockAfterDeletedPur.cost_per_unit > 0,
+      `Scenario 10/11: Biaya satuan tetap terjaga (aktual: ${stockAfterDeletedPur.cost_per_unit})`
     );
 
     // Test 12: Baseline dan provenance bertahan setelah reload

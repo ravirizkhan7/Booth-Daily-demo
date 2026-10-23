@@ -20,7 +20,8 @@ export const exportReportToPDF = ({
   printedBy = 'Owner',
   filename
 }: PDFReportOptions) => {
-  const doc = new jsPDF({
+  const DocConstructor: any = (jsPDF as any).jsPDF || jsPDF;
+  const doc = new DocConstructor({
     orientation: 'portrait',
     unit: 'mm',
     format: 'a4'
@@ -83,10 +84,29 @@ export const exportReportToPDF = ({
   doc.text(`Dicetak Oleh    : ${printedBy}`, pageWidth - 14, currentY, { align: 'right' });
   currentY += 4;
   doc.text(`Tanggal Cetak   : ${printDateStr}`, 14, currentY);
-  doc.text(`Status Data     : Resmi Sistem POS`, pageWidth - 14, currentY, { align: 'right' });
+  if (reportData.filterUserId && reportData.filterUserId !== 'all') {
+    const roleSuffix = reportData.filterUserRole
+      ? ` (${reportData.filterUserRole.toLowerCase() === 'owner' ? 'Owner' : reportData.filterUserRole.toLowerCase() === 'karyawan' ? 'Karyawan' : reportData.filterUserRole})`
+      : '';
+    const userLabel = `${reportData.filterUserName || reportData.filterUserId}${roleSuffix}`;
+    doc.text(`Kasir / User    : ${userLabel}`, pageWidth - 14, currentY, { align: 'right' });
+  } else {
+    doc.text(`Status Data     : Resmi Sistem POS`, pageWidth - 14, currentY, { align: 'right' });
+  }
 
   // 2. SECTION: RINGKASAN EKSEKUTIF (OVERVIEW KPIs)
   currentY += 4;
+  let hppSubText = 'Snapshot Riil (WAC)';
+  if (reportData.totalOrdersCount === 0 && reportData.periodRefundOrders.length === 0) {
+    hppSubText = '-';
+  } else if (reportData.hasLegacyEstimatedHPP && reportData.hppSnapshotOrdersCount === 0 && reportData.hppPartialSnapshotOrdersCount === 0) {
+    hppSubText = 'Estimasi Legacy';
+  } else if (reportData.hasLegacyEstimatedHPP || reportData.hasPartialSnapshotHPP) {
+    hppSubText = `Data Campuran (${reportData.hppSnapshotOrdersCount} Riil, ${reportData.hppLegacyEstimateOrdersCount} Est)`;
+  } else {
+    hppSubText = `Snapshot Riil (${reportData.hppSnapshotOrdersCount} Trx)`;
+  }
+
   autoTable(doc, {
     startY: currentY,
     head: [['TOTAL PENJUALAN', 'TOTAL PEMBELIAN', 'ESTIMASI HPP', 'ESTIMASI LABA KOTOR']],
@@ -94,7 +114,7 @@ export const exportReportToPDF = ({
       [
         `${formatRupiah(reportData.totalSales)}\n(${reportData.totalOrdersCount} Transaksi)`,
         `${formatRupiah(reportData.totalPurchases)}\n(${reportData.totalPurchasesCount} Nota Belanja)`,
-        `${formatRupiah(reportData.totalEstimatedHPP)}\n(Estimasi Biaya Bahan)`,
+        `${formatRupiah(reportData.totalEstimatedHPP)}\n(${hppSubText})`,
         `${formatRupiah(reportData.estimatedGrossProfit)}\n(Margin: ${reportData.grossProfitMarginPercent}%)`
       ]
     ],
@@ -276,68 +296,104 @@ export const exportReportToPDF = ({
   currentY = (doc as any).lastAutoTable.finalY + 6;
 
   // 6. SECTION: DETAIL TRANSAKSI PENJUALAN (SALES ORDERS)
-  const ordersTableRows = reportData.transactionDetailOrders.map(o => {
+  const details = reportData.transactionDetails || reportData.transactionDetailOrders.map(o => {
+    const isRefunded = o.payment?.status === 'refunded';
+    const omzet = isRefunded ? 0 : (Number(o.total_amount) || 0);
+    const hpp = typeof o.total_hpp === 'number' && o.total_hpp >= 0 ? o.total_hpp : 0;
+    const grossProfit = omzet - hpp;
+    const isLegacy = o.hpp_source === 'legacy_estimate' || typeof o.total_hpp !== 'number';
+    const isPartial = o.hpp_source === 'partial_snapshot';
+    const hppCategoryLabel = isLegacy ? 'Estimasi Legacy' : (isPartial ? 'Partial Snapshot' : 'Snapshot Riil');
+    return {
+      order: o,
+      omzet,
+      hpp,
+      grossProfit,
+      marginPercent: omzet > 0 ? Math.round((grossProfit / omzet) * 1000) / 10 : 0,
+      hppCategory: (isLegacy ? 'legacy_estimate' : (isPartial ? 'partial_snapshot' : 'snapshot_riil')) as any,
+      hppCategoryLabel,
+    };
+  });
+
+  const ordersTableRows = details.map(d => {
+    const o = d.order;
     const isRefunded = o.payment?.status === 'refunded';
     return [
       o.order_number,
       formatDate(o.created_at),
       o.created_by_name || 'Kasir',
-      o.order_type === 'take_away' ? 'Takeaway' : 'Dine In',
-      String(o.payment?.method || 'Cash').toUpperCase(),
       isRefunded ? 'REFUNDED' : 'SELESAI',
-      isRefunded ? 'Rp 0' : formatRupiah(o.total_amount)
+      isRefunded ? 'Rp 0' : formatRupiah(o.total_amount),
+      formatRupiah(d.hpp),
+      formatRupiah(d.grossProfit),
+      d.hppCategoryLabel
     ];
   });
 
   if (ordersTableRows.length === 0) {
-    ordersTableRows.push(['-', '-', 'Tidak ada transaksi penjualan pada periode ini', '-', '-', '-', 'Rp 0']);
+    ordersTableRows.push(['-', '-', 'Tidak ada transaksi penjualan pada periode ini', '-', 'Rp 0', 'Rp 0', 'Rp 0', '-']);
   }
 
   autoTable(doc, {
     startY: currentY,
-    head: [['NO. PESANAN', 'TANGGAL & WAKTU', 'KASIR', 'TIPE', 'PEMBAYARAN', 'STATUS', 'TOTAL OMZET']],
+    head: [['NO. PESANAN', 'TANGGAL & WAKTU', 'KASIR', 'STATUS', 'OMZET', 'HPP', 'LABA KOTOR', 'SUMBER HPP']],
     body: ordersTableRows,
     foot: [
       [
-        'TOTAL PENJUALAN PERIODE',
-        '',
-        '',
+        'TOTAL PERIODE',
         '',
         '',
         `${reportData.totalOrdersCount} Trx Selesai`,
-        formatRupiah(reportData.totalSales)
+        formatRupiah(reportData.totalSales),
+        formatRupiah(reportData.totalEstimatedHPP),
+        formatRupiah(reportData.estimatedGrossProfit),
+        ''
       ]
     ],
     theme: 'striped',
     headStyles: {
       fillColor: tableHeaderColor,
       textColor: 255,
-      fontSize: 8,
+      fontSize: 7.5,
       fontStyle: 'bold'
     },
     footStyles: {
       fillColor: [235, 230, 225],
       textColor: [59, 42, 31],
-      fontSize: 8,
+      fontSize: 7.5,
       fontStyle: 'bold'
     },
     bodyStyles: {
-      fontSize: 7,
+      fontSize: 6.8,
       cellPadding: 1.8
     },
     columnStyles: {
-      0: { fontStyle: 'bold' },
-      3: { halign: 'center' },
-      4: { halign: 'center' },
-      5: { halign: 'center', fontStyle: 'bold' },
-      6: { halign: 'right', fontStyle: 'bold' }
+      0: { fontStyle: 'bold', cellWidth: 26 },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 20 },
+      3: { halign: 'center', fontStyle: 'bold', cellWidth: 18 },
+      4: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
+      5: { halign: 'right', cellWidth: 23 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
+      7: { halign: 'center', cellWidth: 23 }
     },
     didParseCell: (data) => {
-      if (data.section === 'body' && data.column.index === 5) {
+      if (data.section === 'body' && data.column.index === 3) {
         if (data.cell.raw === 'REFUNDED') {
           data.cell.styles.textColor = [190, 30, 30];
         } else if (data.cell.raw === 'SELESAI') {
           data.cell.styles.textColor = [20, 130, 60];
+        }
+      }
+      if (data.section === 'body' && data.column.index === 6) {
+        const valStr = String(data.cell.raw || '');
+        if (valStr.includes('-')) {
+          data.cell.styles.textColor = [190, 30, 30];
+        }
+      }
+      if (data.section === 'foot') {
+        if (data.column.index === 4 || data.column.index === 5 || data.column.index === 6) {
+          data.cell.styles.halign = 'right';
         }
       }
     },

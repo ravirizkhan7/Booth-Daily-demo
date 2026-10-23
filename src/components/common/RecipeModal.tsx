@@ -73,7 +73,7 @@ export const RecipeModal: React.FC = () => {
                     >
                       <span className="font-medium text-stone-800 dark:text-stone-200">{ing.stock_name}</span>
                       <span className="font-bold text-[#C68B59] bg-[#C68B59]/10 px-2 py-0.5 rounded-lg text-xs">
-                        {ing.amount} {ing.unit}
+                        {ing.amount} {ing.unit}{ing.waste_percentage ? ` (+${ing.waste_percentage}% susut)` : ''}
                       </span>
                     </div>
                   ))}

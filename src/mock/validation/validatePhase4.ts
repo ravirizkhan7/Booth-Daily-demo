@@ -272,7 +272,7 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
       cost_per_unit: 195,
       current_amount: 900, // Same current_amount
     });
-    if (metaUpdated.name !== 'Sirup Hazelnut Monin Gold' || metaUpdated.cost_per_unit !== 195) {
+    if (metaUpdated.name !== 'Sirup Hazelnut Monin Gold' || metaUpdated.cost_per_unit !== 180) {
       errors.push('[Stock] updateStock metadata update failed');
     }
     const historyCountAfterMeta = mockStore.getStockHistories().length;
@@ -370,15 +370,20 @@ export async function validatePhase4(): Promise<{ pass: boolean; errors: string[
       errors.push(`[Purchase] Expected milk stock ${initialMilkAmount + 2000}, got ${milkAfterPurchase}`);
     }
 
-    // 5.2 Delete purchase (revert +2000ml)
-    const deletePurSuccess = await stockService.deletePurchase(createdPurchase.id);
-    if (!deletePurSuccess) {
-      errors.push('[Purchase] deletePurchase failed');
+    // 5.2 Delete purchase (rejected to preserve inventory valuation integrity)
+    let deletePurRejected = false;
+    try {
+      await stockService.deletePurchase(createdPurchase.id);
+    } catch {
+      deletePurRejected = true;
+    }
+    if (!deletePurRejected) {
+      errors.push('[Purchase] deletePurchase should have been rejected');
     }
 
     const milkAfterRevert = mockStore.getStockById('stk-fresh-milk')?.current_amount ?? 0;
-    if (milkAfterRevert !== initialMilkAmount) {
-      errors.push(`[Purchase] Stock after purchase deletion not reverted. Expected ${initialMilkAmount}, got ${milkAfterRevert}`);
+    if (milkAfterRevert !== initialMilkAmount + 2000) {
+      errors.push(`[Purchase] Stock after rejected purchase deletion was altered. Expected ${initialMilkAmount + 2000}, got ${milkAfterRevert}`);
     }
 
     // =========================================================================

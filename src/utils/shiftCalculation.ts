@@ -1,4 +1,4 @@
-import { Order, Product, Recipe, Stock, Shift, ShiftFinancialSnapshot } from '../types';
+import { Order, Product, Recipe, Stock, Shift, ShiftFinancialSnapshot, ShiftExpense } from '../types';
 import { calculateItemUnitHPP, getOrderTotalHPP } from './reportUtils';
 
 /**
@@ -58,6 +58,7 @@ export interface CalculateShiftInputActuals {
   cash_difference_reason?: string;
   qris_difference_reason?: string;
   notes?: string;
+  shift_expenses?: ShiftExpense[];
 }
 
 /**
@@ -69,7 +70,8 @@ export function calculateShiftFinancials(
   products: Product[] = [],
   recipes: Recipe[] = [],
   stocks: Stock[] = [],
-  actuals?: CalculateShiftInputActuals
+  actuals?: CalculateShiftInputActuals,
+  shiftExpenses?: ShiftExpense[]
 ): ShiftFinancialSnapshot {
   // 1. Transaksi yang dibuat pada shift ini
   const shiftOrders = allOrders.filter(o => o.shift_id === shift.id);
@@ -133,9 +135,21 @@ export function calculateShiftFinancials(
   const estimated_gross_profit = net_sales - estimated_hpp;
 
   // Rumus Keuangan Utama (Bebas dari hitung ganda refund)
-  // Kas Harapan = Kas Awal Shift + Penjualan Tunai - Refund Tunai - Pengeluaran Kas Tercatat
+  // Kas Harapan = Kas Awal Shift + Penjualan Tunai - Refund Tunai - Pengeluaran Kas Tercatat (Efektif/Aktif)
   const cash_initial = Number(shift.cash_initial) || 0;
-  const cash_expenses = 0; // Keterbatasan: Pengeluaran kas per-shift belum didukung dalam sistem
+
+  const effectiveExpenses = shiftExpenses ?? actuals?.shift_expenses;
+  let cash_expenses = 0;
+  if (effectiveExpenses !== undefined) {
+    cash_expenses = effectiveExpenses
+      .filter(e => e.shift_id === shift.id && e.status === 'active')
+      .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  } else if (shift.status === 'closed' && shift.snapshot?.cash_expenses !== undefined) {
+    cash_expenses = Number(shift.snapshot.cash_expenses) || 0;
+  } else {
+    cash_expenses = 0;
+  }
+
   const expected_cash_end = cash_initial + cash_sales - cash_refunds - cash_expenses;
   const expected_qris_end = qris_sales - qris_refunds;
 
@@ -162,12 +176,25 @@ export function calculateShiftFinancials(
   }
 
   // Selisih QRIS
+  const hasQrisActivity = qris_sales > 0 || qris_refunds > 0;
   let qris_difference: number | null = null;
-  let qris_status: 'balanced' | 'discrepancy' | 'unreconciled' = 'unreconciled';
+  let qris_status: 'balanced' | 'discrepancy' | 'unreconciled' | 'no_transaction' = 'unreconciled';
 
-  if (actual_qris_end !== null && actual_qris_end !== undefined) {
-    qris_difference = actual_qris_end - expected_qris_end;
-    qris_status = Math.abs(qris_difference) < 0.01 ? 'balanced' : 'discrepancy';
+  if (!hasQrisActivity) {
+    qris_status = 'no_transaction';
+    if (actual_qris_end !== null && actual_qris_end !== undefined) {
+      qris_difference = actual_qris_end - expected_qris_end;
+      if (Math.abs(qris_difference) >= 0.01) {
+        qris_status = 'discrepancy';
+      }
+    }
+  } else {
+    if (actual_qris_end !== null && actual_qris_end !== undefined) {
+      qris_difference = actual_qris_end - expected_qris_end;
+      qris_status = Math.abs(qris_difference) < 0.01 ? 'balanced' : 'discrepancy';
+    } else {
+      qris_status = 'unreconciled';
+    }
   }
 
   // Verifikasi Refund
@@ -184,7 +211,7 @@ export function calculateShiftFinancials(
   const isQrisMatched =
     actual_qris_end !== null && actual_qris_end !== undefined
       ? Math.abs(qris_difference!) < 0.01
-      : expected_qris_end === 0; // Jika tidak ada transaksi QRIS sama sekali, dianggap cocok
+      : !hasQrisActivity; // Jika tidak ada aktivitas transaksi QRIS (sales=0, refunds=0), tidak memerlukan rekonsiliasi
 
   let reconciliation_status: 'matched' | 'pending_review' | 'approved_variance' | 'correction_requested' = 'matched';
 
@@ -237,5 +264,99 @@ export function calculateShiftFinancials(
     cash_difference_reason,
     qris_difference_reason,
     notes: actuals?.notes || shift.notes,
+  };
+}
+
+export interface ShiftQrisDisplayInfo {
+  status: 'no_transaction' | 'unreconciled' | 'balanced' | 'discrepancy';
+  hasActivity: boolean;
+  label: string;
+  badgeLabel: string;
+  description: string;
+  isReconciledOrExempt: boolean;
+}
+
+/**
+ * Presentation helper aman untuk menampilkan status rekonsiliasi QRIS.
+ * Menangani kompatibilitas mundur snapshot shift historis yang tersimpan dengan status 'unreconciled'
+ * namun tidak memiliki aktivitas penjualan atau refund QRIS sama sekali (qris_sales === 0 && qris_refunds === 0).
+ */
+export function getShiftQrisDisplayInfo(
+  snapshot?: ShiftFinancialSnapshot | null
+): ShiftQrisDisplayInfo {
+  if (!snapshot) {
+    return {
+      status: 'no_transaction',
+      hasActivity: false,
+      label: 'Tidak ada transaksi',
+      badgeLabel: 'Tidak ada QRIS',
+      description: 'Tidak ada transaksi · Tidak perlu rekonsiliasi',
+      isReconciledOrExempt: true,
+    };
+  }
+
+  const qrisSales = typeof snapshot.qris_sales === 'number' ? snapshot.qris_sales : 0;
+  const qrisRefunds = typeof snapshot.qris_refunds === 'number' ? snapshot.qris_refunds : 0;
+  const hasActivity = qrisSales > 0 || qrisRefunds > 0;
+
+  // Kasus 1: Secara eksplisit tercatat no_transaction, atau data historis unreconciled tanpa pergerakan QRIS
+  if (snapshot.qris_status === 'no_transaction' || (!hasActivity && snapshot.qris_status === 'unreconciled')) {
+    // Namun jika kasir pernah mengisi actual_qris_end dan terjadi selisih dari 0
+    if (snapshot.actual_qris_end !== null && snapshot.actual_qris_end !== undefined) {
+      const diff = snapshot.actual_qris_end - (snapshot.expected_qris_end ?? 0);
+      if (Math.abs(diff) >= 0.01) {
+        return {
+          status: 'discrepancy',
+          hasActivity: true,
+          label: 'Selisih',
+          badgeLabel: 'Selisih',
+          description: `Terdapat selisih QRIS`,
+          isReconciledOrExempt: false,
+        };
+      }
+    }
+
+    return {
+      status: 'no_transaction',
+      hasActivity: false,
+      label: 'Tidak ada transaksi',
+      badgeLabel: 'Tidak ada QRIS',
+      description: 'Tidak ada transaksi · Tidak perlu rekonsiliasi',
+      isReconciledOrExempt: true,
+    };
+  }
+
+  // Kasus 2: Status balanced
+  if (snapshot.qris_status === 'balanced') {
+    return {
+      status: 'balanced',
+      hasActivity,
+      label: 'Sesuai (Rp 0)',
+      badgeLabel: 'Sesuai',
+      description: 'QRIS cocok dengan settlement',
+      isReconciledOrExempt: true,
+    };
+  }
+
+  // Kasus 3: Status discrepancy
+  if (snapshot.qris_status === 'discrepancy') {
+    return {
+      status: 'discrepancy',
+      hasActivity: true,
+      label: 'Selisih',
+      badgeLabel: 'Selisih',
+      description: 'Terdapat selisih nominal QRIS',
+      isReconciledOrExempt: false,
+    };
+  }
+
+  // Kasus 4: Ada aktivitas QRIS tapi actual_qris_end belum diisi / unreconciled
+  return {
+    status: 'unreconciled',
+    hasActivity: true,
+    label: 'Belum direkonsiliasi',
+    badgeLabel: 'Belum dicek',
+    description: 'Belum direkonsiliasi dengan settlement',
+    isReconciledOrExempt: false,
   };
 }

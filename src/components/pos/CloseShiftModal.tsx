@@ -27,6 +27,7 @@ export const CloseShiftModal: React.FC = () => {
     isCloseShiftModalOpen,
     closeCloseShiftModal,
     activeShift,
+    activeExpenses,
     closeShift,
     orders,
     products,
@@ -92,9 +93,10 @@ export const CloseShiftModal: React.FC = () => {
         cash_difference_reason: cashDiffReasonInput,
         qris_difference_reason: qrisDiffReasonInput,
         notes: notesInput,
-      }
+      },
+      activeExpenses
     );
-  }, [activeShift, orders, products, recipes, stocks, actualCashInput, actualQrisInput, actualRefundInput, cashDiffReasonInput, qrisDiffReasonInput, notesInput]);
+  }, [activeShift, orders, products, recipes, stocks, actualCashInput, actualQrisInput, actualRefundInput, cashDiffReasonInput, qrisDiffReasonInput, notesInput, activeExpenses]);
 
   if (!isCloseShiftModalOpen || (!activeShift && !closedShiftResult)) return null;
 
@@ -334,11 +336,13 @@ export const CloseShiftModal: React.FC = () => {
                       2. QRIS AKTUAL TERKONFIRMASI
                     </label>
                     <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-stone-100 dark:bg-stone-800 text-stone-500">
-                      Rekonsiliasi EDC
+                      {livePreview.qris_status === 'no_transaction' ? 'Tidak Ada Transaksi QRIS' : 'Rekonsiliasi EDC'}
                     </span>
                   </div>
                   <p className="text-[11px] text-stone-500 dark:text-stone-400">
-                    Total settlement QRIS dari EDC/rekap transaksi perbankan shift ini.
+                    {livePreview.qris_status === 'no_transaction'
+                      ? 'Shift ini tidak mencatat transaksi QRIS (penjualan/refund QRIS Rp 0). Rekonsiliasi tidak diperlukan.'
+                      : 'Total settlement QRIS dari EDC/rekap transaksi perbankan shift ini.'}
                   </p>
                   <NumberInput
                     value={actualQrisInput !== '' ? Number(actualQrisInput) : 0}
@@ -490,10 +494,23 @@ export const CloseShiftModal: React.FC = () => {
                       -{formatRupiah(livePreview.cash_refunds)}
                     </span>
                   </div>
-                  <div className="flex justify-between text-stone-500 dark:text-stone-400 text-[11px]">
-                    <span>Pengeluaran Kas Tercatat (-)</span>
-                    <span>Rp 0 <span className="text-[10px] text-stone-400">(Belum didukung)</span></span>
+                  <div className="flex justify-between text-stone-600 dark:text-stone-300">
+                    <span>Pengeluaran Kas Operasional (-)</span>
+                    <span className="font-semibold text-rose-500">
+                      -{formatRupiah(livePreview.cash_expenses || 0)}
+                    </span>
                   </div>
+                  {activeExpenses && activeExpenses.filter(e => e.status === 'active').length > 0 && (
+                    <div className="p-2 bg-stone-50 dark:bg-stone-800/60 rounded-xl space-y-1 text-[11px]">
+                      <div className="font-semibold text-stone-500 dark:text-stone-400">Rincian Kas Keluar:</div>
+                      {activeExpenses.filter(e => e.status === 'active').map(e => (
+                        <div key={e.id} className="flex justify-between text-stone-600 dark:text-stone-300">
+                          <span className="truncate pr-2">• {e.description} ({e.category})</span>
+                          <span className="font-medium text-rose-500 shrink-0">-{formatRupiah(e.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex justify-between text-stone-800 dark:text-stone-200 font-bold border-t border-stone-100 dark:border-stone-800 pt-1">
                     <span>Kas yang Diharapkan</span>
                     <span>{formatRupiah(livePreview.expected_cash_end)}</span>
@@ -551,12 +568,20 @@ export const CloseShiftModal: React.FC = () => {
                   <div className="flex justify-between text-stone-800 dark:text-stone-200 font-bold">
                     <span>QRIS Aktual</span>
                     <span className={livePreview.actual_qris_end !== null ? 'text-amber-600 dark:text-amber-400' : 'text-stone-400 italic font-normal'}>
-                      {livePreview.actual_qris_end !== null ? formatRupiah(livePreview.actual_qris_end) : 'Belum diisi'}
+                      {livePreview.qris_status === 'no_transaction' && livePreview.actual_qris_end === null
+                        ? 'Tidak ada transaksi'
+                        : livePreview.actual_qris_end !== null
+                        ? formatRupiah(livePreview.actual_qris_end)
+                        : 'Belum diisi'}
                     </span>
                   </div>
                   <div className="flex justify-between items-center pt-1 font-bold">
                     <span>Status Rekonsiliasi QRIS</span>
-                    {livePreview.qris_status === 'unreconciled' ? (
+                    {livePreview.qris_status === 'no_transaction' ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60">
+                        Tidak ada transaksi · Tidak perlu rekonsiliasi
+                      </span>
+                    ) : livePreview.qris_status === 'unreconciled' ? (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-100 dark:bg-stone-800 text-stone-500">
                         Belum direkonsiliasi
                       </span>
@@ -811,6 +836,12 @@ export const CloseShiftModal: React.FC = () => {
                     <span>Kas Diharapkan:</span>
                     <span className="font-bold">{formatRupiah(closedShiftResult.snapshot.expected_cash_end)}</span>
                   </div>
+                  {closedShiftResult.snapshot.cash_expenses !== undefined && closedShiftResult.snapshot.cash_expenses > 0 && (
+                    <div className="flex justify-between text-rose-600 dark:text-rose-400">
+                      <span>Pengeluaran Kas (-):</span>
+                      <span className="font-semibold">-{formatRupiah(closedShiftResult.snapshot.cash_expenses)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span>Cash Aktual di Laci:</span>
                     <span className="font-extrabold text-[#C68B59]">{formatRupiah(closedShiftResult.snapshot.actual_cash_end)}</span>
@@ -836,7 +867,9 @@ export const CloseShiftModal: React.FC = () => {
                   <div className="flex justify-between">
                     <span>QRIS Aktual:</span>
                     <span className="font-bold">
-                      {closedShiftResult.snapshot.actual_qris_end !== null
+                      {closedShiftResult.snapshot.qris_status === 'no_transaction'
+                        ? 'Tidak ada transaksi'
+                        : closedShiftResult.snapshot.actual_qris_end !== null
                         ? formatRupiah(closedShiftResult.snapshot.actual_qris_end)
                         : 'Belum direkonsiliasi'}
                     </span>
@@ -844,7 +877,9 @@ export const CloseShiftModal: React.FC = () => {
                   <div className="flex justify-between items-center">
                     <span>Status QRIS:</span>
                     <span className="font-bold">
-                      {closedShiftResult.snapshot.qris_status === 'unreconciled'
+                      {closedShiftResult.snapshot.qris_status === 'no_transaction'
+                        ? 'Tidak ada transaksi · Tidak perlu rekonsiliasi'
+                        : closedShiftResult.snapshot.qris_status === 'unreconciled'
                         ? 'Belum direkonsiliasi'
                         : closedShiftResult.snapshot.qris_status === 'balanced'
                         ? 'Sesuai (Rp 0)'

@@ -89,6 +89,7 @@ export const DashboardPage: React.FC = () => {
     discountRules,
     shifts,
     activeShift,
+    activeExpenses,
     openReceiptModal,
     settings,
   } = usePOS();
@@ -568,8 +569,8 @@ export const DashboardPage: React.FC = () => {
   // 5. Active Shift Financials & Last Closed Shift for Owner
   const activeFinancials = useMemo(() => {
     if (!activeShift) return null;
-    return calculateShiftFinancials(activeShift, orders, products, recipes, stocks);
-  }, [activeShift, orders, products, recipes, stocks]);
+    return calculateShiftFinancials(activeShift, orders, products, recipes, stocks, undefined, activeExpenses);
+  }, [activeShift, orders, products, recipes, stocks, activeExpenses]);
 
   const lastClosedShift = useMemo(() => {
     return shifts.find(s => s.status === 'closed');
@@ -1640,6 +1641,22 @@ export const DashboardPage: React.FC = () => {
                           {formatRupiah(activeFinancials.qris_sales)}
                         </span>
                       </div>
+                    </div>
+
+                    {Boolean((activeFinancials.cash_expenses ?? 0) > 0) && (
+                      <div className="flex justify-between items-center pt-1.5 border-t border-stone-200/60 dark:border-stone-800 text-[11px]">
+                        <span className="text-stone-500">Kas Keluar Operasional (-):</span>
+                        <span className="font-bold text-rose-500">
+                          -{formatRupiah(activeFinancials.cash_expenses || 0)}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between items-center pt-1 border-t border-stone-200/60 dark:border-stone-800 text-[11px]">
+                      <span className="text-stone-500 font-bold">Ekspektasi Kas Laci:</span>
+                      <span className="font-black text-[#C68B59]">
+                        {formatRupiah(activeFinancials.expected_cash_end)}
+                      </span>
                     </div>
                   </div>
                 </div>

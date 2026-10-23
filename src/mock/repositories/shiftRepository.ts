@@ -1,4 +1,4 @@
-import { Shift, User } from '../../types';
+import { Shift, User, ShiftExpense, ShiftExpenseCategory } from '../../types';
 import { mockStore } from '../store';
 
 export const shiftRepository = {
@@ -51,5 +51,50 @@ export const shiftRepository = {
     user: User;
   }): Promise<Shift> {
     return mockStore.correctShiftReconciliation(payload);
+  },
+
+  async getShiftExpenses(shiftId: string): Promise<ShiftExpense[]> {
+    return mockStore.getShiftExpenses(shiftId);
+  },
+
+  async getAllExpenses(): Promise<ShiftExpense[]> {
+    return mockStore.getAllExpenses();
+  },
+
+  async calculateShiftTheoreticalAvailableCash(shiftId: string): Promise<number> {
+    return mockStore.calculateShiftTheoreticalAvailableCash(shiftId);
+  },
+
+  async recordShiftExpense(payload: {
+    shift_id: string;
+    amount: number;
+    category: ShiftExpenseCategory;
+    description: string;
+    receipt_number?: string;
+    user: User;
+  }): Promise<ShiftExpense> {
+    return mockStore.recordShiftExpense(payload);
+  },
+
+  async cancelShiftExpense(payload: {
+    expense_id: string;
+    cancellation_reason: string;
+    owner_user: User;
+  }): Promise<ShiftExpense> {
+    return mockStore.cancelShiftExpense(payload);
+  },
+
+  async replaceShiftExpense(payload: {
+    old_expense_id: string;
+    new_expense: {
+      amount: number;
+      category: ShiftExpenseCategory;
+      description: string;
+      receipt_number?: string;
+    };
+    cancellation_reason: string;
+    owner_user: User;
+  }): Promise<{ cancelled_expense: ShiftExpense; new_expense: ShiftExpense }> {
+    return mockStore.replaceShiftExpense(payload);
   },
 };

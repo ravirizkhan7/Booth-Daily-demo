@@ -26,6 +26,7 @@ export interface RecipeIngredient {
   stock_name: string;
   amount: number;
   unit: string;
+  waste_percentage?: number;
 }
 
 export interface RecipeStep {
@@ -181,6 +182,35 @@ export interface ShiftAuditTrailEntry {
   details?: Record<string, any>;
 }
 
+export type ShiftExpenseCategory =
+  | 'bahan_baku_darurat'
+  | 'operasional_booth'
+  | 'kebersihan'
+  | 'lain_lain';
+
+export type ShiftExpenseStatus = 'active' | 'cancelled';
+
+export interface ShiftExpense {
+  id: string;
+  shift_id: string;
+  amount: number;
+  category: ShiftExpenseCategory;
+  description: string;
+  created_at: string;
+  created_by_user_id: string;
+  created_by_name: string;
+  created_by_role: UserRole;
+  status: ShiftExpenseStatus;
+  receipt_number?: string;
+  cancelled_at?: string;
+  cancelled_by_user_id?: string;
+  cancelled_by_name?: string;
+  cancellation_reason?: string;
+  authorized_by_user_id?: string;
+  authorized_by_name?: string;
+  replaces_expense_id?: string;
+}
+
 export interface ShiftFinancialSnapshot {
   cash_initial: number;
   expected_cash_end: number;
@@ -204,7 +234,7 @@ export interface ShiftFinancialSnapshot {
   cash_difference: number;
   qris_difference: number | null;
   cash_status: 'balanced' | 'surplus' | 'shortage';
-  qris_status: 'balanced' | 'discrepancy' | 'unreconciled';
+  qris_status: 'balanced' | 'discrepancy' | 'unreconciled' | 'no_transaction';
   refund_status: 'verified' | 'discrepancy' | 'unverified';
   reconciliation_status: ShiftReconciliationStatus;
   cash_difference_reason?: string;
@@ -246,9 +276,9 @@ export interface Order {
   id: string;
   order_number: string;
   order_type: OrderType;
-  created_by_user_id: string;
-  created_by_name: string;
-  created_by_role: UserRole;
+  created_by_user_id?: string;
+  created_by_name?: string;
+  created_by_role?: UserRole;
   subtotal: number;
   tax: number;
   discount: number;

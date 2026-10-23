@@ -15,13 +15,21 @@
     "validate:phase4": "tsx src/mock/validation/validatePhase4.ts",
     "validate:phase5": "tsx src/mock/validation/validatePhase5.ts",
     "validate:shifts": "tsx src/mock/validation/validateShiftSystem.ts",
+    "validate:shift-expenses": "tsx src/mock/validation/validateShiftExpenses.ts",
     "validate:recon": "tsx src/mock/validation/validateShiftReconciliationScenarios.ts",
     "validate:integrity": "tsx src/mock/validation/validateDataIntegrity.ts",
     "validate:formatting": "tsx src/mock/validation/validateNumberInputFormatting.ts",
     "validate:units": "tsx src/mock/validation/validateUnitConversionAndRounding.ts",
     "validate:security": "tsx src/mock/validation/validateSecurityFixes.ts",
     "validate:backup": "tsx src/mock/validation/validateBackupRestore.ts",
-    "validate:reset": "tsx src/mock/validation/validateFactoryReset.ts"
+    "validate:reset": "tsx src/mock/validation/validateFactoryReset.ts",
+    "validate:hpp": "tsx src/mock/validation/validateHPPHelpers.ts",
+    "validate:hpp-phase2": "tsx src/mock/validation/validateHPPPhase2.ts",
+    "validate:hpp-phase3": "tsx src/mock/validation/validateHPPPhase3.ts",
+    "validate:hpp-phase4": "tsx src/mock/validation/validateHPPPhase4.ts",
+    "validate:qris": "tsx src/mock/validation/validateQRISReconciliation.ts",
+    "validate:shift-filters": "tsx src/mock/validation/validateShiftDateFilters.ts",
+    "validate:report-users": "tsx src/mock/validation/validateReportUserFilter.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -39,6 +47,7 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

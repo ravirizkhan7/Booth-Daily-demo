@@ -282,6 +282,7 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
                       <span className="text-stone-400 block text-[10px]">Transaksi & Shift</span>
                       <span className="font-bold text-stone-800 dark:text-stone-200">
                         {previewSummary.orders_count} Pesanan, {previewSummary.shifts_count} Shift
+                        {typeof previewSummary.expenses_count === 'number' && previewSummary.expenses_count > 0 ? `, ${previewSummary.expenses_count} Pengeluaran` : ''}
                       </span>
                     </div>
 

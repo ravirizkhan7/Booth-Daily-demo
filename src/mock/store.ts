@@ -7,20 +7,32 @@ import {
   StockHistory,
   Recipe,
   Order,
+  OrderItem,
   OrderHPPSource,
   Purchase,
   PurchaseItem,
   DiscountRule,
   Settings,
   Shift,
+  ShiftExpense,
+  ShiftExpenseCategory,
+  ShiftExpenseStatus,
+  Payment,
   PaymentMethod,
   BaseUnit,
   BaselineSource,
 } from '../types';
 import { MockStoreState } from './types';
 import { getOperationalDate, calculateShiftFinancials } from '../utils/shiftCalculation';
+import { VALID_EXPENSE_CATEGORIES } from '../utils/shiftExpenseValidation';
 import { calculateItemUnitHPP } from '../utils/reportUtils';
 import { validatePackagingConversion } from '../utils/stockUtils';
+import {
+  calculateWeightedAverageCost,
+  calculateGrossAmount,
+  convertUnitQuantity,
+  roundToRupiah,
+} from '../utils/hppCalculation';
 import { sessionManager } from './repositories/sessionManager';
 import { initialUsers } from './data/users';
 import { initialCategories } from './data/categories';
@@ -557,6 +569,7 @@ export class MockStore {
       discountRules: deepClone(initialDiscountRules),
       settings: deepClone(initialSettings),
       shifts: [],
+      expenses: [],
       activeShiftId: null,
     };
     this.normalizeStocks(seed.stocks, seed.stockHistories);
@@ -1432,6 +1445,10 @@ export class MockStore {
         initialSource = stockData.baseline_source || 'initial_stock_cost';
       }
 
+      if (stockData.id && this.state.stocks.some(s => String(s.id) === String(stockData.id))) {
+        throw new Error(`Bahan baku dengan ID "${stockData.id}" sudah ada di inventaris. Gunakan mutasi pembelian untuk menambah stok.`);
+      }
+
       const nowIso = new Date().toISOString();
       const newStock: Stock = {
         ...stockData,
@@ -1538,7 +1555,9 @@ export class MockStore {
         id: currentStock.id,
         current_amount: newAmount,
         min_amount: stockData.min_amount !== undefined ? Number(stockData.min_amount) : currentStock.min_amount,
-        cost_per_unit: stockData.cost_per_unit !== undefined ? Number(stockData.cost_per_unit) : currentStock.cost_per_unit,
+        cost_per_unit: currentStock.cost_per_unit > 0
+          ? currentStock.cost_per_unit
+          : (stockData.cost_per_unit !== undefined ? Number(stockData.cost_per_unit) : currentStock.cost_per_unit),
         baseline_cost_per_unit: newBaseline,
         baseline_source: updatedBaselineSource,
         baseline_updated_at: updatedBaselineAt,
@@ -1961,6 +1980,19 @@ export class MockStore {
           if (Number(ing.amount) <= 0) {
             throw new Error('Jumlah takaran bahan baku harus lebih besar dari 0');
           }
+          if (ing.waste_percentage !== undefined && ing.waste_percentage !== null) {
+            const w = Number(ing.waste_percentage);
+            if (typeof w !== 'number' || !Number.isFinite(w) || w < 0 || w >= 100) {
+              throw new Error('Persentase susut (waste) harus berada pada rentang 0% <= waste < 100%');
+            }
+          }
+          if (ing.unit) {
+            try {
+              convertUnitQuantity(1, ing.unit, stock.unit, { stockName: stock.name });
+            } catch (err: any) {
+              throw new Error(`Satuan resep "${ing.unit}" tidak kompatibel dengan satuan stok "${stock.unit}": ${err.message}`);
+            }
+          }
         }
       }
 
@@ -2000,6 +2032,19 @@ export class MockStore {
           }
           if (Number(ing.amount) <= 0) {
             throw new Error('Jumlah takaran bahan baku harus lebih besar dari 0');
+          }
+          if (ing.waste_percentage !== undefined && ing.waste_percentage !== null) {
+            const w = Number(ing.waste_percentage);
+            if (typeof w !== 'number' || !Number.isFinite(w) || w < 0 || w >= 100) {
+              throw new Error('Persentase susut (waste) harus berada pada rentang 0% <= waste < 100%');
+            }
+          }
+          if (ing.unit) {
+            try {
+              convertUnitQuantity(1, ing.unit, stock.unit, { stockName: stock.name });
+            } catch (err: any) {
+              throw new Error(`Satuan resep "${ing.unit}" tidak kompatibel dengan satuan stok "${stock.unit}": ${err.message}`);
+            }
           }
         }
       }
@@ -2118,6 +2163,292 @@ export class MockStore {
     return deepClone(newShift);
   }
 
+  public getShiftExpenses(shiftId: string): ShiftExpense[] {
+    return deepClone((this.state.expenses || []).filter(e => e.shift_id === shiftId));
+  }
+
+  public getAllExpenses(): ShiftExpense[] {
+    return deepClone(this.state.expenses || []);
+  }
+
+  public calculateShiftTheoreticalAvailableCash(shiftId: string): number {
+    const shift = (this.state.shifts || []).find(s => s.id === shiftId);
+    if (!shift) return 0;
+
+    const shiftOrders = (this.state.orders || []).filter(o => o.shift_id === shiftId);
+    const shiftRefundOrders = (this.state.orders || []).filter(o => {
+      if (o.refund_shift_id) return o.refund_shift_id === shiftId;
+      return o.shift_id === shiftId && o.payment?.status === 'refunded';
+    });
+
+    let cashSales = 0;
+    shiftOrders.forEach(o => {
+      if (String(o.payment?.method || '').toLowerCase() === 'cash') {
+        cashSales += Number(o.total_amount) || 0;
+      }
+    });
+
+    let cashRefunds = 0;
+    shiftRefundOrders.forEach(o => {
+      const rMethod = String(o.refund_method || o.payment?.method || '').toLowerCase();
+      if (rMethod === 'cash' || !rMethod) {
+        cashRefunds += Number(o.total_amount) || 0;
+      }
+    });
+
+    const activeExpensesTotal = (this.state.expenses || [])
+      .filter(e => e.shift_id === shiftId && e.status === 'active')
+      .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+    return (Number(shift.cash_initial) || 0) + cashSales - cashRefunds - activeExpensesTotal;
+  }
+
+  public recordShiftExpense(payload: {
+    shift_id: string;
+    amount: number;
+    category: ShiftExpenseCategory;
+    description: string;
+    receipt_number?: string;
+    user: User;
+  }): ShiftExpense {
+    this.ensureMigrationPersisted();
+
+    const shift = (this.state.shifts || []).find(s => s.id === payload.shift_id);
+    if (!shift) {
+      throw new Error('Shift tidak ditemukan.');
+    }
+    if (shift.status !== 'open') {
+      throw new Error('Pengeluaran kas hanya dapat dicatat pada shift yang sedang aktif (open).');
+    }
+
+    if (!payload.user || !payload.user.id) {
+      throw new Error('Identitas pengguna pencatat wajib disertakan.');
+    }
+
+    if (
+      typeof payload.amount !== 'number' ||
+      !Number.isFinite(payload.amount) ||
+      payload.amount <= 0 ||
+      !Number.isInteger(payload.amount)
+    ) {
+      throw new Error('Nominal pengeluaran kas harus berupa integer Rupiah positif yang finite.');
+    }
+
+    if (!VALID_EXPENSE_CATEGORIES.includes(payload.category)) {
+      throw new Error(`Kategori pengeluaran "${payload.category}" tidak valid.`);
+    }
+
+    if (typeof payload.description !== 'string' || payload.description.trim().length < 3) {
+      throw new Error('Alasan/keperluan pengeluaran wajib diisi minimal 3 karakter non-spasi.');
+    }
+
+    const availableCash = this.calculateShiftTheoreticalAvailableCash(shift.id);
+    if (payload.amount > availableCash) {
+      throw new Error(
+        `Nominal pengeluaran (Rp ${payload.amount.toLocaleString('id-ID')}) melebihi saldo kas teoritis yang tersedia di laci (Rp ${availableCash.toLocaleString('id-ID')}).`
+      );
+    }
+
+    const memorySnapshot = deepClone(this.state);
+
+    try {
+      if (!Array.isArray(this.state.expenses)) {
+        this.state.expenses = [];
+      }
+
+      const now = new Date();
+      const newExpense: ShiftExpense = {
+        id: `exp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        shift_id: shift.id,
+        amount: payload.amount,
+        category: payload.category,
+        description: payload.description.trim(),
+        created_at: now.toISOString(),
+        created_by_user_id: payload.user.id,
+        created_by_name: payload.user.name,
+        created_by_role: payload.user.role,
+        status: 'active',
+        receipt_number: payload.receipt_number?.trim() || undefined,
+      };
+
+      this.state.expenses.push(newExpense);
+      this.persist();
+      return deepClone(newExpense);
+    } catch (err: any) {
+      this.state = memorySnapshot;
+      throw new Error(`Gagal menyimpan pengeluaran kas: ${err?.message || 'Penyimpanan gagal'}. Perubahan dibatalkan secara utuh.`);
+    }
+  }
+
+  public cancelShiftExpense(payload: {
+    expense_id: string;
+    cancellation_reason: string;
+    owner_user: User;
+  }): ShiftExpense {
+    this.ensureMigrationPersisted();
+
+    if (!payload.owner_user || payload.owner_user.role !== 'owner') {
+      throw new Error('Hanya Owner yang berwenang membatalkan pengeluaran kas laci.');
+    }
+
+    if (!Array.isArray(this.state.expenses)) {
+      this.state.expenses = [];
+    }
+
+    const expenseIndex = this.state.expenses.findIndex(e => e.id === payload.expense_id);
+    if (expenseIndex === -1) {
+      throw new Error('Data pengeluaran kas tidak ditemukan.');
+    }
+
+    const targetExpense = this.state.expenses[expenseIndex];
+    const shift = (this.state.shifts || []).find(s => s.id === targetExpense.shift_id);
+    if (!shift || shift.status !== 'open') {
+      throw new Error('Pembatalan pengeluaran hanya dapat dilakukan pada shift yang masih aktif (open).');
+    }
+
+    if (targetExpense.status !== 'active') {
+      throw new Error('Pengeluaran ini sudah dibatalkan sebelumnya.');
+    }
+
+    if (
+      typeof payload.cancellation_reason !== 'string' ||
+      payload.cancellation_reason.trim().length < 3
+    ) {
+      throw new Error('Alasan pembatalan wajib diisi minimal 3 karakter non-spasi.');
+    }
+
+    const memorySnapshot = deepClone(this.state);
+
+    try {
+      const now = new Date();
+      targetExpense.status = 'cancelled';
+      targetExpense.cancelled_at = now.toISOString();
+      targetExpense.cancelled_by_user_id = payload.owner_user.id;
+      targetExpense.cancelled_by_name = payload.owner_user.name;
+      targetExpense.cancellation_reason = payload.cancellation_reason.trim();
+
+      this.persist();
+      return deepClone(targetExpense);
+    } catch (err: any) {
+      this.state = memorySnapshot;
+      throw new Error(`Gagal menyimpan pembatalan pengeluaran kas: ${err?.message || 'Penyimpanan gagal'}. Perubahan dibatalkan secara utuh.`);
+    }
+  }
+
+  public replaceShiftExpense(payload: {
+    old_expense_id: string;
+    new_expense: {
+      amount: number;
+      category: ShiftExpenseCategory;
+      description: string;
+      receipt_number?: string;
+    };
+    cancellation_reason: string;
+    owner_user: User;
+  }): { cancelled_expense: ShiftExpense; new_expense: ShiftExpense } {
+    this.ensureMigrationPersisted();
+
+    if (!payload.owner_user || payload.owner_user.role !== 'owner') {
+      throw new Error('Hanya Owner yang berwenang mengoreksi dan mengganti pengeluaran kas laci.');
+    }
+
+    if (!Array.isArray(this.state.expenses)) {
+      this.state.expenses = [];
+    }
+
+    const oldExpense = this.state.expenses.find(e => e.id === payload.old_expense_id);
+    if (!oldExpense) {
+      throw new Error('Data pengeluaran kas yang akan digantikan tidak ditemukan.');
+    }
+
+    const shift = (this.state.shifts || []).find(s => s.id === oldExpense.shift_id);
+    if (!shift || shift.status !== 'open') {
+      throw new Error('Koreksi penggantian pengeluaran hanya dapat dilakukan pada shift yang masih aktif (open).');
+    }
+
+    if (oldExpense.status !== 'active') {
+      throw new Error('Pengeluaran yang sudah dibatalkan tidak dapat dikoreksi ulang.');
+    }
+
+    if (
+      typeof payload.new_expense.amount !== 'number' ||
+      !Number.isFinite(payload.new_expense.amount) ||
+      payload.new_expense.amount <= 0 ||
+      !Number.isInteger(payload.new_expense.amount)
+    ) {
+      throw new Error('Nominal pengeluaran kas pengganti harus berupa integer Rupiah positif yang finite.');
+    }
+
+    if (!VALID_EXPENSE_CATEGORIES.includes(payload.new_expense.category)) {
+      throw new Error(`Kategori pengeluaran pengganti "${payload.new_expense.category}" tidak valid.`);
+    }
+
+    if (
+      typeof payload.new_expense.description !== 'string' ||
+      payload.new_expense.description.trim().length < 3
+    ) {
+      throw new Error('Alasan/keperluan pengeluaran pengganti wajib diisi minimal 3 karakter non-spasi.');
+    }
+
+    if (
+      typeof payload.cancellation_reason !== 'string' ||
+      payload.cancellation_reason.trim().length < 3
+    ) {
+      throw new Error('Alasan pembatalan entri lama wajib diisi minimal 3 karakter non-spasi.');
+    }
+
+    // Evaluasi plafon kas laci dengan mengembalikan nominal oldExpense ke saldo tersedia
+    const currentAvailable = this.calculateShiftTheoreticalAvailableCash(shift.id);
+    const availableWithOldReleased = currentAvailable + oldExpense.amount;
+    if (payload.new_expense.amount > availableWithOldReleased) {
+      throw new Error(
+        `Nominal pengeluaran pengganti (Rp ${payload.new_expense.amount.toLocaleString('id-ID')}) melebihi saldo kas teoritis yang tersedia di laci (Rp ${availableWithOldReleased.toLocaleString('id-ID')}).`
+      );
+    }
+
+    const memorySnapshot = deepClone(this.state);
+
+    try {
+      const now = new Date();
+
+      // 1. Batalkan entri lama
+      oldExpense.status = 'cancelled';
+      oldExpense.cancelled_at = now.toISOString();
+      oldExpense.cancelled_by_user_id = payload.owner_user.id;
+      oldExpense.cancelled_by_name = payload.owner_user.name;
+      oldExpense.cancellation_reason = payload.cancellation_reason.trim();
+
+      // 2. Terbitkan entri pengganti
+      const newExpense: ShiftExpense = {
+        id: `exp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        shift_id: shift.id,
+        amount: payload.new_expense.amount,
+        category: payload.new_expense.category,
+        description: payload.new_expense.description.trim(),
+        created_at: now.toISOString(),
+        created_by_user_id: oldExpense.created_by_user_id, // Kasir yang bertugas/membelanjakan uang
+        created_by_name: oldExpense.created_by_name,
+        created_by_role: oldExpense.created_by_role,
+        status: 'active',
+        receipt_number: payload.new_expense.receipt_number?.trim() || undefined,
+        authorized_by_user_id: payload.owner_user.id, // Owner pengotorisasi koreksi
+        authorized_by_name: payload.owner_user.name,
+        replaces_expense_id: oldExpense.id,
+      };
+
+      this.state.expenses.push(newExpense);
+      this.persist();
+
+      return {
+        cancelled_expense: deepClone(oldExpense),
+        new_expense: deepClone(newExpense),
+      };
+    } catch (err: any) {
+      this.state = memorySnapshot;
+      throw new Error(`Gagal menyimpan koreksi penggantian pengeluaran kas: ${err?.message || 'Penyimpanan gagal'}. Perubahan dibatalkan secara utuh.`);
+    }
+  }
+
   public closeShift(payload: {
     shift_id: string;
     actual_cash_end: number;
@@ -2153,7 +2484,8 @@ export class MockStore {
         cash_difference_reason: payload.cash_difference_reason,
         qris_difference_reason: payload.qris_difference_reason,
         notes: payload.notes,
-      }
+      },
+      this.getShiftExpenses(shift.id)
     );
 
     // Validasi alasan selisih jika ada selisih
@@ -2331,7 +2663,8 @@ export class MockStore {
         cash_difference_reason: payload.cash_difference_reason,
         qris_difference_reason: payload.qris_difference_reason,
         notes: shift.notes,
-      }
+      },
+      this.getShiftExpenses(shift.id)
     );
 
     const now = new Date();
@@ -2462,7 +2795,10 @@ export class MockStore {
    * 5. Prepend order to orders collection and persist to storage.
    * If any precondition fails, aborts immediately without any state mutations.
    */
-  public addOrder(orderData: Omit<Order, 'id' | 'order_number'> & { id?: string; order_number?: string }): Order {
+  public addOrder(orderData: Omit<Partial<Order>, 'items' | 'payment'> & {
+    items: Array<Omit<OrderItem, 'id' | 'subtotal'> & { id?: string; subtotal?: number }>;
+    payment: Omit<Payment, 'id' | 'order_id'> & { id?: string; order_id?: string };
+  }): Order {
     this.ensureMigrationPersisted();
     // Validate that an active shift is open on this cashier device
     const activeShift = this.getActiveShift();
@@ -2471,175 +2807,236 @@ export class MockStore {
       throw new Error('Shift kasir belum dibuka. Buka shift kasir terlebih dahulu untuk memproses transaksi.');
     }
 
-    const items = Array.isArray(orderData.items) ? orderData.items : [];
-
-    // Calculate aggregated ingredient requirements across all items
-    const requiredMap = new Map<string, { stockId: string; stockName: string; amount: number; unit: string }>();
-
-    for (const item of items) {
-      const recipe = this.state.recipes.find(r => String(r.product_id) === String(item.product_id));
-      if (!recipe) {
-        throw new Error(`Produk "${item.product_name}" belum memiliki resep yang valid`);
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const items = Array.isArray(orderData.items) ? orderData.items : [];
+      if (items.length === 0) {
+        throw new Error('Daftar item pesanan tidak boleh kosong');
       }
 
-      if (Array.isArray(recipe.ingredients)) {
-        for (const ing of recipe.ingredients) {
-          const stockId = String(ing.stock_id);
-          const consumed = ing.amount * item.qty;
-          const existing = requiredMap.get(stockId);
+      // Calculate aggregated gross ingredient requirements in stock base units across all items
+      const requiredMap = new Map<string, { stockId: string; stockName: string; amount: number; unit: string }>();
 
+      for (const item of items) {
+        const itemQty = Number(item.qty) || 1;
+        if (itemQty <= 0) {
+          throw new Error(`Kuantitas item "${item.product_name}" harus lebih besar dari 0`);
+        }
+
+        const recipe = this.state.recipes.find(r => String(r.product_id) === String(item.product_id));
+        if (!recipe) {
+          throw new Error(`Produk "${item.product_name}" belum memiliki resep yang valid`);
+        }
+
+        if (!Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
+          throw new Error(`Resep untuk produk "${item.product_name}" tidak memiliki bahan baku yang valid`);
+        }
+
+        for (const ing of recipe.ingredients) {
+          if (!ing.stock_id) {
+            throw new Error(`Bahan baku pada resep "${item.product_name}" tidak valid`);
+          }
+          const stockId = String(ing.stock_id);
+          const stock = this.state.stocks.find(s => String(s.id) === stockId);
+          if (!stock) {
+            throw new Error(`Bahan baku "${ing.stock_name || stockId}" (ID: ${stockId}) tidak ditemukan di inventaris`);
+          }
+          if ((stock as any).conversion_status === 'unverified_legacy') {
+            throw new Error(
+              `Transaksi ditolak: Bahan baku "${stock.name}" memiliki satuan lama (${stock.unit}) yang belum diverifikasi. Harap lakukan verifikasi satuan dasar di menu Inventaris terlebih dahulu.`
+            );
+          }
+
+          const netAmount = Number(ing.amount);
+          if (typeof netAmount !== 'number' || !Number.isFinite(netAmount) || netAmount <= 0) {
+            throw new Error(`Takaran bahan "${stock.name}" pada resep "${item.product_name}" harus lebih besar dari 0`);
+          }
+
+          // Hitung kuantitas bruto per porsi dengan persentase susut (waste)
+          const grossPerPortion = calculateGrossAmount(netAmount, ing.waste_percentage);
+          const totalGrossItem = grossPerPortion * itemQty;
+
+          // Konversi ke satuan dasar stok
+          const convertedGross = convertUnitQuantity(
+            totalGrossItem,
+            ing.unit || stock.unit,
+            stock.unit,
+            { stockName: stock.name }
+          );
+
+          const existing = requiredMap.get(stockId);
           if (existing) {
-            existing.amount += consumed;
+            existing.amount += convertedGross;
           } else {
             requiredMap.set(stockId, {
               stockId,
-              stockName: ing.stock_name,
-              amount: consumed,
-              unit: ing.unit,
+              stockName: stock.name,
+              amount: convertedGross,
+              unit: stock.unit,
             });
           }
         }
       }
-    }
 
-    const requirements = Array.from(requiredMap.values());
+      const requirements = Array.from(requiredMap.values());
 
-    // Pre-validate stock sufficiency and verification status BEFORE modifying any state
-    for (const req of requirements) {
-      const stock = this.state.stocks.find(s => String(s.id) === req.stockId);
-      if (!stock) {
-        throw new Error(`Bahan baku "${req.stockName}" (ID: ${req.stockId}) tidak ditemukan di inventaris`);
-      }
-      if ((stock as any).conversion_status === 'unverified_legacy') {
-        throw new Error(
-          `Transaksi ditolak: Bahan baku "${stock.name}" memiliki satuan lama (${stock.unit}) yang belum diverifikasi. Harap lakukan verifikasi satuan dasar di menu Inventaris terlebih dahulu.`
-        );
-      }
-      if (stock.current_amount < req.amount) {
-        throw new Error(
-          `Stok bahan baku "${stock.name}" tidak mencukupi! Dibutuhkan ${req.amount} ${stock.unit}, namun hanya tersisa ${stock.current_amount} ${stock.unit}.`
-        );
-      }
-    }
-
-    // Generate deterministic sequential order number if needed (ORD-YYYYMMDD-XXXX)
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const dateStr = `${year}${month}${day}`;
-    const prefix = `ORD-${dateStr}-`;
-
-    let maxSeq = 0;
-    this.state.orders.forEach(o => {
-      if (o.order_number && o.order_number.startsWith(prefix)) {
-        const parts = o.order_number.split('-');
-        if (parts.length === 3) {
-          const seq = parseInt(parts[2], 10);
-          if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
+      // Pre-validate stock sufficiency and verification status BEFORE modifying any state
+      for (const req of requirements) {
+        const stock = this.state.stocks.find(s => String(s.id) === req.stockId);
+        if (!stock) {
+          throw new Error(`Bahan baku "${req.stockName}" (ID: ${req.stockId}) tidak ditemukan di inventaris`);
+        }
+        if (stock.current_amount < req.amount) {
+          throw new Error(
+            `Stok bahan baku "${stock.name}" tidak mencukupi! Dibutuhkan ${req.amount} ${stock.unit}, namun hanya tersisa ${stock.current_amount} ${stock.unit}.`
+          );
         }
       }
-    });
 
-    const generatedOrderNumber = `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
-    const orderNumber = orderData.order_number || generatedOrderNumber;
-    const orderId = orderData.id || `ord-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      // Generate deterministic sequential order number if needed (ORD-YYYYMMDD-XXXX)
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const dateStr = `${year}${month}${day}`;
+      const prefix = `ORD-${dateStr}-`;
 
-    const cutoff = this.state.settings?.operational_day_cutoff_time || '04:00';
-    const effectiveOperationalDate = orderData.operational_date || activeShift?.operational_date || getOperationalDate(now, cutoff);
+      let maxSeq = 0;
+      this.state.orders.forEach(o => {
+        if (o.order_number && o.order_number.startsWith(prefix)) {
+          const parts = o.order_number.split('-');
+          if (parts.length === 3) {
+            const seq = parseInt(parts[2], 10);
+            if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
+          }
+        }
+      });
 
-    // Snapshot HPP per item and total order HPP at transaction creation (Unit-First Integer Policy)
-    let orderTotalHPP = 0;
-    const snapshottedItems = items.map((item, idx) => {
-      const qty = Number(item.qty) || 1;
-      const price = Number(item.price) || 0;
+      const generatedOrderNumber = `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+      const orderNumber = orderData.order_number || generatedOrderNumber;
+      const orderId = orderData.id || `ord-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-      // If unit_cost_price already present and valid, preserve it
-      if (typeof item.unit_cost_price === 'number' && item.unit_cost_price >= 0) {
-        const roundedUnitCost = Math.round(item.unit_cost_price);
-        const itemSubtotalCost = typeof item.subtotal_cost === 'number' && item.subtotal_cost >= 0
-          ? item.subtotal_cost
-          : roundedUnitCost * qty;
-        orderTotalHPP += itemSubtotalCost;
+      const cutoff = this.state.settings?.operational_day_cutoff_time || '04:00';
+      const effectiveOperationalDate = orderData.operational_date || activeShift?.operational_date || getOperationalDate(now, cutoff);
+
+      // Snapshot HPP per item and total order HPP at transaction creation (Unit-First Integer Policy)
+      let orderTotalHPP = 0;
+      const snapshottedItems = items.map((item, idx) => {
+        const qty = Number(item.qty) || 1;
+        const price = Number(item.price) || 0;
+
+        // If unit_cost_price already present and valid, preserve it
+        if (typeof item.unit_cost_price === 'number' && item.unit_cost_price >= 0) {
+          const roundedUnitCost = roundToRupiah(item.unit_cost_price);
+          const itemSubtotalCost = typeof item.subtotal_cost === 'number' && item.subtotal_cost >= 0
+            ? item.subtotal_cost
+            : roundedUnitCost * qty;
+          orderTotalHPP += itemSubtotalCost;
+          return {
+            ...item,
+            id: item.id || `item-${Date.now()}-${idx + 1}`,
+            product_id: item.product_id,
+            product_name: item.product_name || `Produk ${item.product_id}`,
+            price,
+            qty,
+            subtotal: Number(item.subtotal) || price * qty,
+            unit_cost_price: roundedUnitCost,
+            subtotal_cost: itemSubtotalCost,
+            is_estimated_cost: Boolean(item.is_estimated_cost),
+          };
+        }
+
+        // Compute HPP snapshot using single source of truth helper
+        const { unitCost, isEstimatedFallback } = calculateItemUnitHPP(
+          item.product_id,
+          price,
+          this.state.products,
+          this.state.recipes,
+          this.state.stocks
+        );
+        // Unit-First Integer Policy: Round unit cost to integer Rupiah first, then multiply by qty
+        const roundedUnitCost = roundToRupiah(unitCost);
+        const subtotalCost = roundedUnitCost * qty;
+        orderTotalHPP += subtotalCost;
+
         return {
           ...item,
           id: item.id || `item-${Date.now()}-${idx + 1}`,
+          product_id: item.product_id,
+          product_name: item.product_name || `Produk ${item.product_id}`,
           price,
           qty,
           subtotal: Number(item.subtotal) || price * qty,
           unit_cost_price: roundedUnitCost,
-          subtotal_cost: itemSubtotalCost,
-          is_estimated_cost: Boolean(item.is_estimated_cost),
+          subtotal_cost: subtotalCost,
+          is_estimated_cost: isEstimatedFallback,
         };
-      }
+      });
 
-      // Compute HPP snapshot using single source of truth helper
-      const { unitCost, isEstimatedFallback } = calculateItemUnitHPP(
-        item.product_id,
-        price,
-        this.state.products,
-        this.state.recipes,
-        this.state.stocks
-      );
-      // Unit-First Integer Policy: Round unit cost to integer Rupiah first, then multiply by qty
-      const roundedUnitCost = Math.round(unitCost);
-      const subtotalCost = roundedUnitCost * qty;
-      orderTotalHPP += subtotalCost;
+      const calculatedSubtotal = snapshottedItems.reduce((sum, it) => sum + it.subtotal, 0);
+      const calculatedTotal = typeof orderData.total_amount === 'number'
+        ? orderData.total_amount
+        : calculatedSubtotal + (orderData.tax || 0);
 
-      return {
-        ...item,
-        id: item.id || `item-${Date.now()}-${idx + 1}`,
-        price,
-        qty,
-        subtotal: Number(item.subtotal) || price * qty,
-        unit_cost_price: roundedUnitCost,
-        subtotal_cost: subtotalCost,
-        is_estimated_cost: isEstimatedFallback,
+      const newOrder: Order = {
+        ...orderData,
+        id: orderId,
+        order_number: orderNumber,
+        shift_id: effectiveShiftId,
+        operational_date: effectiveOperationalDate,
+        created_by_user_id: orderData.created_by_user_id || activeShift?.opened_by_user_id || 'usr-default',
+        created_by_name: orderData.created_by_name || activeShift?.opened_by_name || 'Kasir',
+        created_by_role: orderData.created_by_role || 'karyawan',
+        order_type: orderData.order_type || 'take_away',
+        discount: typeof orderData.discount === 'number' ? orderData.discount : 0,
+        subtotal: typeof orderData.subtotal === 'number' ? orderData.subtotal : calculatedSubtotal,
+        tax: typeof orderData.tax === 'number' ? orderData.tax : 0,
+        total_amount: calculatedTotal,
+        created_at: orderData.created_at || now.toISOString(),
+        items: snapshottedItems,
+        total_hpp: roundToRupiah(orderTotalHPP),
+        hpp_source: orderData.hpp_source || 'transaction_snapshot',
+        payment: {
+          id: orderData.payment?.id || `pay-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          order_id: orderId,
+          method: orderData.payment?.method || 'cash',
+          amount_paid: typeof orderData.payment?.amount_paid === 'number' ? orderData.payment.amount_paid : calculatedTotal,
+          change: typeof orderData.payment?.change === 'number' ? orderData.payment.change : 0,
+          status: orderData.payment?.status || 'completed',
+        },
       };
-    });
 
-    const newOrder: Order = {
-      ...orderData,
-      id: orderId,
-      order_number: orderNumber,
-      shift_id: effectiveShiftId,
-      operational_date: effectiveOperationalDate,
-      items: snapshottedItems,
-      total_hpp: Math.round(orderTotalHPP),
-      hpp_source: orderData.hpp_source || 'transaction_snapshot',
-      payment: {
-        ...orderData.payment,
-        order_id: orderId,
-      },
-    };
+      // Execute atomic mutations
+      for (const req of requirements) {
+        const stockIndex = this.state.stocks.findIndex(s => String(s.id) === req.stockId);
+        if (stockIndex !== -1) {
+          this.state.stocks[stockIndex].current_amount = Math.max(
+            0,
+            this.state.stocks[stockIndex].current_amount - req.amount
+          );
 
-    // Execute atomic mutations
-    for (const req of requirements) {
-      const stockIndex = this.state.stocks.findIndex(s => String(s.id) === req.stockId);
-      if (stockIndex !== -1) {
-        this.state.stocks[stockIndex].current_amount = Math.max(
-          0,
-          this.state.stocks[stockIndex].current_amount - req.amount
-        );
-
-        this.state.stockHistories.unshift({
-          id: `sth-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-          stock_id: req.stockId,
-          stock_name: req.stockName,
-          change_amount: -req.amount,
-          unit: req.unit,
-          type: 'penjualan',
-          reference: `Penjualan #${newOrder.order_number}`,
-          user_name: newOrder.created_by_name || 'Kasir',
-          final_amount: this.state.stocks[stockIndex].current_amount,
-          created_at: newOrder.created_at || new Date().toISOString(),
-        });
+          this.state.stockHistories.unshift({
+            id: `sth-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            stock_id: req.stockId,
+            stock_name: req.stockName,
+            change_amount: -req.amount,
+            unit: req.unit,
+            type: 'penjualan',
+            reference: `Penjualan #${newOrder.order_number}`,
+            user_name: newOrder.created_by_name || 'Kasir',
+            final_amount: this.state.stocks[stockIndex].current_amount,
+            created_at: newOrder.created_at || new Date().toISOString(),
+          });
+        }
       }
-    }
 
-    this.state.orders.unshift(newOrder);
-    this.persist();
-    return deepClone(newOrder);
+      this.state.orders.unshift(newOrder);
+      this.persist();
+      return deepClone(newOrder);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   public updateOrder(id: string, orderData: Partial<Order>): Order {
@@ -2740,15 +3137,20 @@ export class MockStore {
 
       // TIER 1: Pre-validasi dan kalkulasi seluruh item secara atomik
       const processedItems: PurchaseItem[] = [];
-      const stockMutations: Array<{
+      const seenItemIds = new Set<string>();
+
+      interface LineItemMutation {
         stockIndex: number;
+        stockId: string;
         baseQtyToAdd: number;
         costPerBaseUnit: number;
+        totalLineCost: number;
         historyNote: string;
         packageUnit?: string;
         conversionRatio?: number;
         packagePrice?: number;
-      }> = [];
+      }
+      const lineMutations: LineItemMutation[] = [];
 
       for (let idx = 0; idx < items.length; idx++) {
         const item = items[idx];
@@ -2764,6 +3166,14 @@ export class MockStore {
         }
         const stock = this.state.stocks[stockIndex];
 
+        // Validasi stok awal: jika negatif, tolak pembelian secara ketat
+        if (stock.current_amount < 0) {
+          throw new Error(
+            `Pembelian ditolak: Saldo stok bahan "${stock.name}" bernilai negatif (${stock.current_amount} ${stock.unit}). ` +
+            `Selesaikan opname fisik terlebih dahulu sebelum mencatat pembelian baru.`
+          );
+        }
+
         // Tentukan apakah pembelian memakai kemasan supplier atau langsung satuan dasar
         const hasPackageInput = item.package_qty !== undefined || item.conversion_ratio !== undefined || item.package_price !== undefined;
 
@@ -2772,7 +3182,6 @@ export class MockStore {
         let packageUnit = hasPackageInput ? (item.package_unit || 'Kemasan').trim() : stock.unit;
         let packagePrice = hasPackageInput ? Number(item.package_price) : Number(item.unit_cost);
 
-        // Jika tidak ada package input eksplisit, tapi ada qty dan unit_cost
         if (!hasPackageInput) {
           packageQty = Number(item.qty);
           conversionRatio = 1;
@@ -2798,9 +3207,27 @@ export class MockStore {
         const costPerBaseUnit = validation.costPerBaseUnit!;
         const totalCost = validation.totalCost!;
 
+        // Guard against overflow or non-finite values
+        if (
+          !Number.isFinite(totalBaseQty) ||
+          !Number.isFinite(costPerBaseUnit) ||
+          !Number.isFinite(totalCost) ||
+          totalBaseQty > Number.MAX_SAFE_INTEGER ||
+          totalCost > Number.MAX_SAFE_INTEGER
+        ) {
+          throw new Error(`Kalkulasi item "${stock.name}" menghasilkan nilai di luar batas numerik yang aman.`);
+        }
+
+        // ID deduplication handling
+        let itemId = item.id;
+        if (!itemId || seenItemIds.has(itemId)) {
+          itemId = `pur-item-${Date.now()}-${idx + 1}-${Math.floor(Math.random() * 1000)}`;
+        }
+        seenItemIds.add(itemId);
+
         const processedItem: PurchaseItem = {
           ...item,
-          id: item.id || `pur-item-${Date.now()}-${idx + 1}`,
+          id: itemId,
           stock_id: stock.id,
           stock_name: stock.name,
           package_qty: packageQty,
@@ -2820,15 +3247,73 @@ export class MockStore {
           ? `Beli ${packageQty} ${packageUnit} @ Rp${packagePrice.toLocaleString('id-ID')} (isi ${conversionRatio} ${stock.unit}/${packageUnit})`
           : `Beli langsung ${totalBaseQty} ${stock.unit} @ Rp${costPerBaseUnit.toLocaleString('id-ID')}/${stock.unit}`;
 
-        stockMutations.push({
+        lineMutations.push({
           stockIndex,
+          stockId: stock.id,
           baseQtyToAdd: totalBaseQty,
           costPerBaseUnit,
+          totalLineCost: totalCost,
           historyNote,
           packageUnit,
           conversionRatio,
           packagePrice,
         });
+      }
+
+      // Agregasi per stock_id untuk kalkulasi Weighted Average Cost (WAC)
+      // Agregasikan kuantitas dan nilai masuk per stok sebelum menghitung WAC
+      interface StockWACSummary {
+        stockIndex: number;
+        oldQty: number;
+        oldWAC: number;
+        totalIncomingQty: number;
+        totalIncomingValue: number;
+        newWAC: number;
+        finalQty: number;
+        lastPackageUnit?: string;
+        lastPackageRatio?: number;
+        lastPackagePrice?: number;
+      }
+      const wacByStock = new Map<string, StockWACSummary>();
+
+      for (const line of lineMutations) {
+        let summary = wacByStock.get(line.stockId);
+        if (!summary) {
+          const s = this.state.stocks[line.stockIndex];
+          summary = {
+            stockIndex: line.stockIndex,
+            oldQty: s.current_amount,
+            oldWAC: s.cost_per_unit || 0,
+            totalIncomingQty: 0,
+            totalIncomingValue: 0,
+            newWAC: 0,
+            finalQty: 0,
+          };
+          wacByStock.set(line.stockId, summary);
+        }
+
+        summary.totalIncomingQty += line.baseQtyToAdd;
+        summary.totalIncomingValue += line.totalLineCost;
+        summary.lastPackageUnit = line.packageUnit;
+        summary.lastPackageRatio = line.conversionRatio;
+        summary.lastPackagePrice = line.packagePrice;
+      }
+
+      // Hitung WAC untuk setiap stok menggunakan pure helper calculateWeightedAverageCost
+      for (const [stockId, summary] of wacByStock.entries()) {
+        const effectiveIncomingUnitCost = summary.totalIncomingQty > 0
+          ? summary.totalIncomingValue / summary.totalIncomingQty
+          : 0;
+
+        const calculatedWAC = calculateWeightedAverageCost({
+          oldQty: summary.oldQty,
+          oldUnitCost: summary.oldWAC,
+          addedQty: summary.totalIncomingQty,
+          addedUnitCost: effectiveIncomingUnitCost,
+        });
+
+        summary.newWAC = calculatedWAC;
+        summary.finalQty = summary.oldQty + summary.totalIncomingQty;
       }
 
       // Hitung total belanja dari seluruh item yang sudah divalidasi
@@ -2848,28 +3333,40 @@ export class MockStore {
       // TIER 2: Mutasi ke RAM (stocks dan stockHistories)
       this.state.purchases.unshift(newPurchase);
 
-      for (const mut of stockMutations) {
-        const targetStock = this.state.stocks[mut.stockIndex];
-        targetStock.current_amount += mut.baseQtyToAdd;
-        if (mut.costPerBaseUnit > 0) {
-          targetStock.cost_per_unit = mut.costPerBaseUnit;
-        }
-        // Simpan preferensi kemasan terakhir untuk prefill berikutnya
-        targetStock.default_package_unit = mut.packageUnit;
-        targetStock.default_package_size = mut.conversionRatio;
-        targetStock.default_package_price = mut.packagePrice;
+      // Mutasi stok dengan WAC hasil agregasi
+      for (const [_, summary] of wacByStock.entries()) {
+        const targetStock = this.state.stocks[summary.stockIndex];
+        targetStock.current_amount = summary.finalQty;
+        targetStock.cost_per_unit = summary.newWAC;
+
+        if (summary.lastPackageUnit) targetStock.default_package_unit = summary.lastPackageUnit;
+        if (summary.lastPackageRatio) targetStock.default_package_size = summary.lastPackageRatio;
+        if (summary.lastPackagePrice) targetStock.default_package_price = summary.lastPackagePrice;
+      }
+
+      // Catat riwayat mutasi per baris item secara sekuensial
+      const runningStockAmount = new Map<string, number>();
+      for (const [stockId, summary] of wacByStock.entries()) {
+        runningStockAmount.set(stockId, summary.oldQty);
+      }
+
+      for (const line of lineMutations) {
+        const targetStock = this.state.stocks[line.stockIndex];
+        const currentRunning = runningStockAmount.get(line.stockId)!;
+        const nextRunning = currentRunning + line.baseQtyToAdd;
+        runningStockAmount.set(line.stockId, nextRunning);
 
         this.state.stockHistories.unshift({
           id: `sth-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           stock_id: targetStock.id,
           stock_name: targetStock.name,
-          change_amount: mut.baseQtyToAdd,
+          change_amount: line.baseQtyToAdd,
           unit: targetStock.unit,
           type: 'pembelian',
           reference: `Pembelian #${newPurchase.purchase_number}`,
           user_name: 'Owner',
-          final_amount: targetStock.current_amount,
-          notes: mut.historyNote,
+          final_amount: nextRunning,
+          notes: line.historyNote,
           created_at: newPurchase.date ? `${newPurchase.date}T08:00:00.000Z` : new Date().toISOString(),
         });
       }
@@ -2895,186 +3392,47 @@ export class MockStore {
       }
       const oldPurchase = this.state.purchases[index];
 
-      // ── TIER 1: Tentukan daftar item baru ──────────────────────────────────────
-      // Jika purchaseData membawa items baru, validasi dan proses semuanya.
-      // Jika tidak membawa items, pertahankan items lama (perubahan header saja).
-      const incomingItems = purchaseData.items;
-      const hasNewItems = Array.isArray(incomingItems) && incomingItems.length > 0;
-
-      let newProcessedItems: PurchaseItem[];
-      type StockMutation = {
-        stockIndex: number;
-        stockId: string;
-        baseQtyDelta: number;      // positif = tambah, negatif = kurangi
-        newCostPerBaseUnit: number | null; // null = tidak ada perubahan harga
-        historyNote: string;
-      };
-      const stockMutations: StockMutation[] = [];
-
-      if (hasNewItems) {
-        // ── TIER 1a: Validasi seluruh item baru secara atomik ──────────────────
-        const processedItems: PurchaseItem[] = [];
-        type RawMutation = {
-          stockIndex: number;
-          stockId: string;
-          baseQtyToAdd: number;
-          costPerBaseUnit: number;
-          historyNote: string;
-          packageUnit?: string;
-          conversionRatio?: number;
-          packagePrice?: number;
-        };
-        const rawMutations: RawMutation[] = [];
-
-        for (let idx = 0; idx < incomingItems!.length; idx++) {
-          const item = incomingItems![idx];
-          if (!item.stock_id) {
-            throw new Error(`Item #${idx + 1}: Bahan baku wajib dipilih.`);
-          }
-          const stockIndex = (this.state.stocks || []).findIndex(
-            s => String(s.id) === String(item.stock_id)
+      // KEBIJAKAN KONSERVATIF FASE 2:
+      // Tolak perubahan rincian item yang telah dibukukan demi menjaga integritas valuasi WAC.
+      if (purchaseData.items !== undefined) {
+        const isItemsModified = !this._arePurchaseItemsEqual(oldPurchase.items, purchaseData.items);
+        if (isItemsModified) {
+          throw new Error(
+            'Nota pembelian yang telah dibukukan tidak dapat diubah rincian itemnya demi menjaga integritas nilai persediaan (Weighted Average Cost). ' +
+            'Lakukan penyesuaian stok fisik secara manual melalui menu Inventaris jika terdapat ketidaksesuaian barang.'
           );
-          if (stockIndex === -1) {
-            throw new Error(`Item #${idx + 1}: Bahan baku ID "${item.stock_id}" tidak ditemukan.`);
-          }
-          const stock = this.state.stocks[stockIndex];
-
-          const hasPackageInput = item.package_qty !== undefined || item.conversion_ratio !== undefined || item.package_price !== undefined;
-          const packageQty    = hasPackageInput ? Number(item.package_qty)    : Number(item.qty);
-          const conversionRatio = hasPackageInput ? Number(item.conversion_ratio) : 1;
-          const packageUnit   = hasPackageInput ? (item.package_unit || 'Kemasan').trim() : stock.unit;
-          const packagePrice  = hasPackageInput ? Number(item.package_price)   : Number(item.unit_cost);
-
-          const validation = validatePackagingConversion({
-            stockName: stock.name,
-            baseUnit: stock.unit,
-            packageQty,
-            conversionRatio,
-            packagePrice,
-            packageUnit,
-          });
-          if (!validation.isValid) {
-            throw new Error(validation.error || `Validasi item "${stock.name}" gagal.`);
-          }
-
-          const totalBaseQty    = validation.totalBaseQuantity!;
-          const costPerBaseUnit = validation.costPerBaseUnit!;
-          const totalCost       = validation.totalCost!;
-
-          const historyNote = hasPackageInput && conversionRatio !== 1
-            ? `Edit nota #${oldPurchase.purchase_number}: beli ${packageQty} ${packageUnit} @ Rp${packagePrice.toLocaleString('id-ID')} (isi ${conversionRatio} ${stock.unit}/${packageUnit})`
-            : `Edit nota #${oldPurchase.purchase_number}: beli langsung ${totalBaseQty} ${stock.unit} @ Rp${costPerBaseUnit.toLocaleString('id-ID')}/${stock.unit}`;
-
-          processedItems.push({
-            ...item,
-            id: item.id || `pur-item-${Date.now()}-${idx + 1}`,
-            stock_id: stock.id,
-            stock_name: stock.name,
-            package_qty: packageQty,
-            package_unit: packageUnit,
-            package_price: packagePrice,
-            conversion_ratio: conversionRatio,
-            qty: totalBaseQty,
-            unit: stock.unit,
-            unit_cost: costPerBaseUnit,
-            total_cost: totalCost,
-            conversion_status: 'verified',
-          });
-
-          rawMutations.push({ stockIndex, stockId: stock.id, baseQtyToAdd: totalBaseQty, costPerBaseUnit, historyNote, packageUnit, conversionRatio, packagePrice });
         }
-
-        // ── TIER 1b: Bangun peta delta per stok (new qty − old qty) ───────────
-        // Kumpulkan kontribusi qty lama per stock_id
-        const oldQtyMap: Record<string, number> = {};
-        for (const oldItem of oldPurchase.items) {
-          const sid = String(oldItem.stock_id);
-          oldQtyMap[sid] = (oldQtyMap[sid] || 0) + Number(oldItem.qty);
-        }
-        // Kumpulkan kontribusi qty baru per stock_id
-        const newQtyMap: Record<string, number> = {};
-        const newCostMap: Record<string, number> = {};
-        for (let i = 0; i < rawMutations.length; i++) {
-          const sid = String(rawMutations[i].stockId);
-          newQtyMap[sid] = (newQtyMap[sid] || 0) + rawMutations[i].baseQtyToAdd;
-          // Simpan biaya terakhir (nanti dipakai untuk update cost_per_unit)
-          newCostMap[sid] = rawMutations[i].costPerBaseUnit;
-        }
-
-        // Gabungkan semua stock_id yang terlibat (lama + baru)
-        const allStockIds = new Set([...Object.keys(oldQtyMap), ...Object.keys(newQtyMap)]);
-        for (const sid of allStockIds) {
-          const sIdx = this.state.stocks.findIndex(s => String(s.id) === sid);
-          if (sIdx === -1) continue;
-          const delta = (newQtyMap[sid] || 0) - (oldQtyMap[sid] || 0);
-          const resultingAmount = this.state.stocks[sIdx].current_amount + delta;
-          if (resultingAmount < 0) {
-            throw new Error(
-              `Pengeditan nota akan membuat stok "${this.state.stocks[sIdx].name}" menjadi negatif ` +
-              `(saat ini: ${this.state.stocks[sIdx].current_amount}, delta: ${delta}). Operasi dibatalkan.`
-            );
-          }
-          const newCost = newCostMap[sid] !== undefined ? newCostMap[sid] : null;
-          // Ambil catatan dari raw mutation pertama untuk stok ini
-          const refMut = rawMutations.find(m => String(m.stockId) === sid);
-          const note = refMut
-            ? refMut.historyNote
-            : `Edit nota #${oldPurchase.purchase_number}: penyesuaian stok ${delta >= 0 ? '+' : ''}${delta} ${this.state.stocks[sIdx].unit}`;
-          stockMutations.push({ stockIndex: sIdx, stockId: sid, baseQtyDelta: delta, newCostPerBaseUnit: newCost, historyNote: note });
-        }
-
-        newProcessedItems = processedItems;
-      } else {
-        // Header-only edit: tidak ada perubahan stok
-        newProcessedItems = oldPurchase.items;
       }
 
-      // ── TIER 2: Mutasi RAM ─────────────────────────────────────────────────
-      // Bangun objek Purchase baru
-      const newTotalAmount = newProcessedItems.reduce((sum, it) => sum + it.total_cost, 0);
+      // Tolak perubahan purchase_number karena terikat secara permanen dengan riwayat audit
+      if (purchaseData.purchase_number !== undefined && purchaseData.purchase_number !== oldPurchase.purchase_number) {
+        throw new Error(
+          'Nomor nota pembelian tidak dapat diubah karena terikat secara permanen dengan riwayat mutasi stok.'
+        );
+      }
+
+      // Tolak perubahan tanggal nota karena mempengaruhi urutan historis transaksi
+      if (purchaseData.date !== undefined && purchaseData.date !== oldPurchase.date) {
+        throw new Error(
+          'Tanggal nota pembelian tidak dapat diubah demi menjaga integritas urutan historis transaksi.'
+        );
+      }
+
+      // Tolak perubahan total_amount manual
+      if (purchaseData.total_amount !== undefined && purchaseData.total_amount !== oldPurchase.total_amount) {
+        throw new Error(
+          'Total nilai nota pembelian tidak dapat diubah karena rincian item bersifat tetap.'
+        );
+      }
+
+      // Izinkan hanya perubahan header non-akuntansi yang aman (supplier, notes)
       const updatedPurchase: Purchase = {
         ...oldPurchase,
-        ...purchaseData,
-        id: oldPurchase.id,
-        items: newProcessedItems,
-        total_amount: hasNewItems ? newTotalAmount : (purchaseData.total_amount ?? oldPurchase.total_amount),
+        supplier: purchaseData.supplier !== undefined ? purchaseData.supplier : oldPurchase.supplier,
+        notes: purchaseData.notes !== undefined ? purchaseData.notes : oldPurchase.notes,
       };
+
       this.state.purchases[index] = updatedPurchase;
-
-      // Terapkan delta stok + update cost_per_unit + catat histori
-      const editTimestamp = updatedPurchase.date
-        ? `${updatedPurchase.date}T08:01:00.000Z`
-        : new Date().toISOString();
-
-      for (const mut of stockMutations) {
-        const targetStock = this.state.stocks[mut.stockIndex];
-        targetStock.current_amount += mut.baseQtyDelta;
-
-        // Kebijakan: gunakan harga terbaru yang valid dari nota yang baru diedit
-        if (mut.newCostPerBaseUnit !== null && mut.newCostPerBaseUnit > 0) {
-          // Scan seluruh pembelian remaining untuk stok ini, ambil yang terbaru
-          const latestCost = this._findLatestCostPerUnit(String(mut.stockId));
-          targetStock.cost_per_unit = latestCost ?? mut.newCostPerBaseUnit;
-        }
-
-        if (mut.baseQtyDelta !== 0) {
-          this.state.stockHistories.unshift({
-            id: `sth-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-            stock_id: targetStock.id,
-            stock_name: targetStock.name,
-            change_amount: mut.baseQtyDelta,
-            unit: targetStock.unit,
-            type: 'penyesuaian',
-            reference: `Edit Pembelian #${updatedPurchase.purchase_number}`,
-            user_name: 'Owner',
-            final_amount: targetStock.current_amount,
-            notes: mut.historyNote,
-            created_at: editTimestamp,
-          });
-        }
-      }
-
-      // ── TIER 3: Persist ───────────────────────────────────────────────────
       this.persist();
       return deepClone(updatedPurchase);
     } catch (err) {
@@ -3083,12 +3441,27 @@ export class MockStore {
     }
   }
 
+  private _arePurchaseItemsEqual(oldItems: PurchaseItem[], newItems: PurchaseItem[]): boolean {
+    if (!Array.isArray(oldItems) || !Array.isArray(newItems)) return false;
+    if (oldItems.length !== newItems.length) return false;
+    for (let i = 0; i < oldItems.length; i++) {
+      const o = oldItems[i];
+      const n = newItems[i];
+      if (String(o.stock_id) !== String(n.stock_id)) return false;
+      if (Number(o.qty) !== Number(n.qty)) return false;
+      if (Number(o.unit_cost) !== Number(n.unit_cost)) return false;
+      if (Number(o.total_cost) !== Number(n.total_cost)) return false;
+      if (o.unit !== n.unit) return false;
+      if (Number(o.package_qty || 0) !== Number(n.package_qty || 0)) return false;
+      if (Number(o.package_price || 0) !== Number(n.package_price || 0)) return false;
+      if (Number(o.conversion_ratio || 1) !== Number(n.conversion_ratio || 1)) return false;
+    }
+    return true;
+  }
+
   /**
    * Cari harga satuan dasar (cost_per_unit) terakhir yang valid untuk suatu stok
-   * dari seluruh nota pembelian yang tersimpan (diurutkan berdasarkan tanggal terbaru).
-   * Menggunakan urutan waktu konsisten dan aturan tie-break deterministik.
-   * Memastikan nilai yang diambil adalah harga per satuan dasar, bukan harga kemasan.
-   * Mengembalikan null jika tidak ada pembelian yang mengandung stok tersebut.
+   * dari seluruh nota pembelian yang tersimpan (dipertahankan untuk utilitas audit/inspeksi).
    */
   private _findLatestCostPerUnit(
     stockId: string,
@@ -3109,7 +3482,6 @@ export class MockStore {
         if (String(item.stock_id) === String(stockId)) {
           let baseCost = Number(item.unit_cost);
 
-          // Jika ada package_price dan conversion_ratio valid, pastikan baseCost adalah per satuan dasar
           if (
             typeof item.package_price === 'number' &&
             item.package_price > 0 &&
@@ -3117,7 +3489,6 @@ export class MockStore {
             item.conversion_ratio > 0
           ) {
             const calculatedBase = Math.round((item.package_price / item.conversion_ratio) * 1000) / 1000;
-            // Jika unit_cost keliru diisi package_price padahal conversion_ratio > 1
             if (item.conversion_ratio > 1 && item.unit_cost === item.package_price) {
               baseCost = calculatedBase;
             } else if (baseCost <= 0) {
@@ -3134,11 +3505,6 @@ export class MockStore {
 
     if (candidates.length === 0) return null;
 
-    // Urutan deterministik:
-    // 1. Tanggal (date) descending (format YYYY-MM-DD)
-    // 2. Timestamp created_at descending
-    // 3. purchase_number descending
-    // 4. id descending
     candidates.sort((a, b) => {
       const dateA = a.purchase.date || '';
       const dateB = b.purchase.date || '';
@@ -3166,117 +3532,17 @@ export class MockStore {
 
   public deletePurchase(id: string): boolean {
     this.ensureMigrationPersisted();
-    const memorySnapshot = deepClone(this.state);
-    try {
-      const purchaseIndex = this.state.purchases.findIndex(p => String(p.id) === String(id));
-      if (purchaseIndex === -1) return false;
-      const purchase = this.state.purchases[purchaseIndex];
-
-      const remainingPurchases = this.state.purchases.filter(p => String(p.id) !== String(id));
-
-      // ── TIER 1: Validasi Pra-Mutasi (Anti-Negatif & Baseline Safety) ────────
-      if (Array.isArray(purchase.items)) {
-        // Agregasi pengurangan per stok untuk menangani multi-item dengan stock_id sama
-        const deductionMap = new Map<string, number>();
-        for (const item of purchase.items) {
-          const sId = String(item.stock_id);
-          deductionMap.set(sId, (deductionMap.get(sId) || 0) + Number(item.qty));
-        }
-
-        for (const [stockId, totalDeduction] of deductionMap.entries()) {
-          const stockIndex = this.state.stocks.findIndex(s => String(s.id) === stockId);
-          if (stockIndex === -1) continue;
-          const targetStock = this.state.stocks[stockIndex];
-
-          // 1. Validasi saldo stok tidak menjadi negatif (JANGAN gunakan Math.max(0, ...))
-          const resultingAmount = targetStock.current_amount - totalDeduction;
-          if (resultingAmount < 0) {
-            throw new Error(
-              `Penghapusan nota akan membuat stok "${targetStock.name}" menjadi negatif ` +
-              `(saat ini: ${targetStock.current_amount}, akan dikurangi: ${totalDeduction}). ` +
-              `Sesuaikan stok secara manual sebelum menghapus nota ini.`
-            );
-          }
-
-          // 2. Validasi ketersediaan sumber biaya (Latest purchase tersisa ATAU Baseline sah)
-          const nextCost = this._findLatestCostPerUnit(stockId, remainingPurchases);
-          if (nextCost === null || nextCost <= 0) {
-            // Tidak ada pembelian tersisa untuk stok ini.
-            // Periksa apakah baseline yang sah tersimpan secara terpisah dan bukan unverified_legacy:
-            const hasValidBaseline =
-              typeof targetStock.baseline_cost_per_unit === 'number' &&
-              isFinite(targetStock.baseline_cost_per_unit) &&
-              targetStock.baseline_cost_per_unit > 0 &&
-              targetStock.baseline_source !== 'unverified_legacy' &&
-              Boolean(targetStock.baseline_source);
-
-            if (!hasValidBaseline) {
-              throw new Error(
-                `Penghapusan nota ditolak: Bahan "${targetStock.name}" tidak memiliki riwayat pembelian lain ` +
-                `dan baseline biaya sah tidak tersedia. Tetapkan baseline biaya terlebih dahulu sebelum menghapus nota ini.`
-              );
-            }
-          }
-        }
-      }
-
-      // ── TIER 2: Mutasi RAM ─────────────────────────────────────────────────
-      this.state.purchases = remainingPurchases;
-
-      const deleteTimestamp = purchase.date
-        ? `${purchase.date}T08:02:00.000Z`
-        : new Date().toISOString();
-
-      if (Array.isArray(purchase.items)) {
-        for (const item of purchase.items) {
-          const stockIndex = this.state.stocks.findIndex(
-            s => String(s.id) === String(item.stock_id)
-          );
-          if (stockIndex === -1) continue;
-          const targetStock = this.state.stocks[stockIndex];
-
-          // Revert quantity
-          targetStock.current_amount -= Number(item.qty);
-
-          // Update cost_per_unit sesuai aturan:
-          // Jika ada pembelian lain tersisa -> pakai nextCost
-          // Jika tidak ada -> pulihkan baseline_cost_per_unit (sudah divalidasi sah di Tier 1)
-          const nextCost = this._findLatestCostPerUnit(String(item.stock_id), this.state.purchases);
-          if (nextCost !== null && nextCost > 0) {
-            targetStock.cost_per_unit = nextCost;
-          } else if (
-            typeof targetStock.baseline_cost_per_unit === 'number' &&
-            targetStock.baseline_cost_per_unit > 0 &&
-            targetStock.baseline_source !== 'unverified_legacy' &&
-            Boolean(targetStock.baseline_source)
-          ) {
-            targetStock.cost_per_unit = targetStock.baseline_cost_per_unit;
-          }
-
-          // Catat audit trail
-          this.state.stockHistories.unshift({
-            id: `sth-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-            stock_id: targetStock.id,
-            stock_name: targetStock.name,
-            change_amount: -Number(item.qty),
-            unit: targetStock.unit,
-            type: 'penyesuaian',
-            reference: `Hapus Pembelian #${purchase.purchase_number}`,
-            user_name: 'Owner',
-            final_amount: targetStock.current_amount,
-            notes: `Nota ${purchase.purchase_number} dihapus; stok dikembalikan -${item.qty} ${targetStock.unit}`,
-            created_at: deleteTimestamp,
-          });
-        }
-      }
-
-      // ── TIER 3: Persist ───────────────────────────────────────────────────
-      this.persist();
-      return true;
-    } catch (err) {
-      this.state = memorySnapshot;
-      throw err;
+    const purchaseIndex = this.state.purchases.findIndex(p => String(p.id) === String(id));
+    if (purchaseIndex === -1) {
+      return false;
     }
+
+    // KEBIJAKAN KONSERVATIF FASE 2:
+    // Tolak penghapusan nota pembelian yang telah dibukukan demi menjaga integritas WAC.
+    throw new Error(
+      'Penghapusan nota pembelian tidak diizinkan demi menjaga integritas nilai buku persediaan (Weighted Average Cost). ' +
+      'Jika diperlukan koreksi kuantitas barang fisik, lakukan penyesuaian stok fisik secara manual melalui menu Inventaris.'
+    );
   }
 
   // ----------------------------------------------------

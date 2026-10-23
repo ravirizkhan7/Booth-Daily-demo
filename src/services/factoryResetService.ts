@@ -254,6 +254,10 @@ export const factoryResetService = {
         `Verifikasi gagal: Total relasi bahan resep (${totalIngredients}) tidak sesuai seed (30).`
       );
     }
+    const expenses = mockStore.getAllExpenses();
+    if (expenses.length !== 0) {
+      throw new Error(`Verifikasi gagal: Pengeluaran kas (${expenses.length}) belum bersih.`);
+    }
   },
 
   /**

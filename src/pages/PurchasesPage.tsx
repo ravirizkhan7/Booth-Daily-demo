@@ -5,7 +5,7 @@ import { Purchase, PurchaseItem, Stock } from '../types';
 import { formatRupiah } from '../utils/formatters';
 import {
   ShoppingBag, Plus, Search, Edit2, Trash2, Eye, X,
-  Truck, ArrowRight, PackageCheck, AlertCircle
+  Truck, ArrowRight, PackageCheck, AlertCircle, Info
 } from 'lucide-react';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { validatePackagingConversion } from '../utils/stockUtils';
@@ -16,7 +16,8 @@ export const PurchasesPage: React.FC = () => {
     stocks,
     addPurchase,
     editPurchase,
-    removePurchase
+    removePurchase,
+    showToast,
   } = usePOS();
 
   const [search, setSearch] = useState('');
@@ -130,8 +131,14 @@ export const PurchasesPage: React.FC = () => {
 
   const handleDeleteConfirm = async () => {
     if (!deletingPurchase) return;
-    await removePurchase(deletingPurchase.id);
-    setDeletingPurchase(null);
+    try {
+      await removePurchase(deletingPurchase.id);
+      showToast('Nota pembelian berhasil dihapus', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Gagal menghapus nota pembelian', 'error');
+    } finally {
+      setDeletingPurchase(null);
+    }
   };
 
   // Item list handlers
@@ -289,6 +296,7 @@ export const PurchasesPage: React.FC = () => {
           notes: formData.notes,
           items: itemsWithIds
         });
+        showToast('Nota pembelian berhasil diperbarui', 'success');
       } else {
         await addPurchase({
           purchase_number: formData.purchase_number,
@@ -299,6 +307,7 @@ export const PurchasesPage: React.FC = () => {
           notes: formData.notes,
           items: itemsWithIds
         });
+        showToast('Pembelian baru berhasil dicatat', 'success');
       }
 
       setIsModalOpen(false);
@@ -429,7 +438,7 @@ export const PurchasesPage: React.FC = () => {
                           type="button"
                           onClick={() => setDeletingPurchase(pur)}
                           className="p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer"
-                          title="Hapus Nota (Kembalikan Stok)"
+                          title="Batalkan Nota Pembelian (Dibatasi)"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -461,6 +470,18 @@ export const PurchasesPage: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+              {editingPurchase && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-2xl text-[11px] text-amber-900 dark:text-amber-200 font-semibold space-y-1">
+                  <p className="font-extrabold flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                    <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Mode Edit Nota Pembelian (Hanya Header)</span>
+                  </p>
+                  <p className="leading-relaxed">
+                    Demi menjaga integritas nilai buku persediaan (WAC) dan riwayat mutasi stok, rincian barang belanjaan, nomor nota, tanggal, dan total nilai bersifat tetap (read-only). Hanya nama supplier dan catatan yang dapat diperbarui.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-stone-700 dark:text-stone-300 mb-1">
@@ -469,9 +490,14 @@ export const PurchasesPage: React.FC = () => {
                   <input
                     type="text"
                     required
+                    disabled={Boolean(editingPurchase)}
                     value={formData.purchase_number}
                     onChange={e => setFormData({ ...formData, purchase_number: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-extrabold focus:outline-none"
+                    className={`w-full px-3.5 py-2.5 rounded-xl border font-extrabold focus:outline-none ${
+                      editingPurchase
+                        ? 'bg-stone-100 dark:bg-stone-800/60 border-stone-200 dark:border-stone-800 text-stone-500 cursor-not-allowed'
+                        : 'bg-stone-50 dark:bg-[#171514] border-stone-300 dark:border-stone-700'
+                    }`}
                   />
                 </div>
 
@@ -482,9 +508,14 @@ export const PurchasesPage: React.FC = () => {
                   <input
                     type="date"
                     required
+                    disabled={Boolean(editingPurchase)}
                     value={formData.date}
                     onChange={e => setFormData({ ...formData, date: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-semibold focus:outline-none"
+                    className={`w-full px-3.5 py-2.5 rounded-xl border font-semibold focus:outline-none ${
+                      editingPurchase
+                        ? 'bg-stone-100 dark:bg-stone-800/60 border-stone-200 dark:border-stone-800 text-stone-500 cursor-not-allowed'
+                        : 'bg-stone-50 dark:bg-[#171514] border-stone-300 dark:border-stone-700'
+                    }`}
                   />
                 </div>
               </div>
@@ -509,14 +540,16 @@ export const PurchasesPage: React.FC = () => {
                   <label className="block font-extrabold text-stone-800 dark:text-stone-200 uppercase text-[11px]">
                     DAFTAR BARANG DIBELI & KONVERSI KEMASAN
                   </label>
-                  <button
-                    type="button"
-                    onClick={handleAddItem}
-                    className="px-3 py-1 rounded-xl bg-[#3B2A1F] text-[#F7F5F2] font-bold text-[11px] flex items-center gap-1 hover:bg-[#2A1E16] cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-[#D4A373]" />
-                    Tambah Barang
-                  </button>
+                  {!editingPurchase && (
+                    <button
+                      type="button"
+                      onClick={handleAddItem}
+                      className="px-3 py-1 rounded-xl bg-[#3B2A1F] text-[#F7F5F2] font-bold text-[11px] flex items-center gap-1 hover:bg-[#2A1E16] cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-[#D4A373]" />
+                      Tambah Barang
+                    </button>
+                  )}
                 </div>
 
                 {formData.items.length === 0 ? (
@@ -536,9 +569,14 @@ export const PurchasesPage: React.FC = () => {
                               Bahan Baku (Satuan Dasar: <strong className="text-[#3B2A1F] dark:text-[#D4A373]">{baseUnit}</strong>)
                             </label>
                             <select
+                              disabled={Boolean(editingPurchase)}
                               value={item.stock_id}
                               onChange={e => handleItemChange(idx, 'stock_id', e.target.value)}
-                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                              className={`w-full px-2.5 py-1.5 rounded-xl border font-bold text-[11px] ${
+                                editingPurchase
+                                  ? 'bg-stone-100 dark:bg-stone-800/60 border-stone-200 dark:border-stone-800 text-stone-500 cursor-not-allowed'
+                                  : 'bg-stone-50 dark:bg-[#171514] border-stone-300 dark:border-stone-700'
+                              }`}
                             >
                               {stocks.map(s => (
                                 <option key={s.id} value={s.id}>{s.name} ({s.unit})</option>
@@ -546,36 +584,38 @@ export const PurchasesPage: React.FC = () => {
                             </select>
                           </div>
 
-                          <div className="flex items-center gap-1 pt-3">
-                            <button
-                              type="button"
-                              onClick={() => handleSetDirectBaseUnit(idx)}
-                              title={`Beli langsung dalam satuan dasar (${baseUnit})`}
-                              className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
-                                isDirectBase
-                                  ? 'bg-stone-200 dark:bg-stone-700 border-stone-400 dark:border-stone-600 text-stone-900 dark:text-stone-100'
-                                  : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-200'
-                              }`}
-                            >
-                              Beli {baseUnit} Langsung
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleSetDefaultPackage(idx)}
-                              title="Gunakan kemasan default supplier"
-                              className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 hover:bg-amber-100 transition-colors cursor-pointer"
-                            >
-                              Kemasan Supplier
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveItem(idx)}
-                              className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer ml-1"
-                              title="Hapus baris barang ini"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
+                          {!editingPurchase && (
+                            <div className="flex items-center gap-1 pt-3">
+                              <button
+                                type="button"
+                                onClick={() => handleSetDirectBaseUnit(idx)}
+                                title={`Beli langsung dalam satuan dasar (${baseUnit})`}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                                  isDirectBase
+                                    ? 'bg-stone-200 dark:bg-stone-700 border-stone-400 dark:border-stone-600 text-stone-900 dark:text-stone-100'
+                                    : 'bg-stone-100 dark:bg-stone-800 border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-400 hover:bg-stone-200'
+                                }`}
+                              >
+                                Beli {baseUnit} Langsung
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSetDefaultPackage(idx)}
+                                title="Gunakan kemasan default supplier"
+                                className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-800 dark:text-amber-300 hover:bg-amber-100 transition-colors cursor-pointer"
+                              >
+                                Kemasan Supplier
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveItem(idx)}
+                                className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer ml-1"
+                                title="Hapus baris barang ini"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         {/* Package & Conversion Details Input Grid */}
@@ -585,11 +625,16 @@ export const PurchasesPage: React.FC = () => {
                               Jumlah Kemasan
                             </label>
                             <NumberInput
+                              disabled={Boolean(editingPurchase)}
                               min={0.001}
                               allowDecimals={baseUnit !== 'Pcs'}
                               value={item.package_qty ?? 1}
                               onChange={val => handleItemChange(idx, 'package_qty', val)}
-                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                              className={`w-full px-2.5 py-1.5 rounded-xl border font-bold text-[11px] ${
+                                editingPurchase
+                                  ? 'bg-stone-100 dark:bg-stone-800/60 border-stone-200 dark:border-stone-800 text-stone-500 cursor-not-allowed'
+                                  : 'bg-stone-50 dark:bg-[#171514] border-stone-300 dark:border-stone-700'
+                              }`}
                             />
                           </div>
 
@@ -599,10 +644,15 @@ export const PurchasesPage: React.FC = () => {
                             </label>
                             <input
                               type="text"
+                              disabled={Boolean(editingPurchase)}
                               value={item.package_unit || ''}
                               onChange={e => handleItemChange(idx, 'package_unit', e.target.value)}
                               placeholder="Misal: Kg, Botol, Pak"
-                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                              className={`w-full px-2.5 py-1.5 rounded-xl border font-bold text-[11px] ${
+                                editingPurchase
+                                  ? 'bg-stone-100 dark:bg-stone-800/60 border-stone-200 dark:border-stone-800 text-stone-500 cursor-not-allowed'
+                                  : 'bg-stone-50 dark:bg-[#171514] border-stone-300 dark:border-stone-700'
+                              }`}
                             />
                           </div>
 
@@ -611,11 +661,16 @@ export const PurchasesPage: React.FC = () => {
                               Isi per Kemasan ({baseUnit})
                             </label>
                             <NumberInput
+                              disabled={Boolean(editingPurchase)}
                               min={0.001}
                               allowDecimals={baseUnit !== 'Pcs'}
                               value={item.conversion_ratio ?? 1}
                               onChange={val => handleItemChange(idx, 'conversion_ratio', val)}
-                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                              className={`w-full px-2.5 py-1.5 rounded-xl border font-bold text-[11px] ${
+                                editingPurchase
+                                  ? 'bg-stone-100 dark:bg-stone-800/60 border-stone-200 dark:border-stone-800 text-stone-500 cursor-not-allowed'
+                                  : 'bg-stone-50 dark:bg-[#171514] border-stone-300 dark:border-stone-700'
+                              }`}
                             />
                           </div>
 
@@ -624,12 +679,17 @@ export const PurchasesPage: React.FC = () => {
                               Harga / Kemasan (Rp)
                             </label>
                             <NumberInput
+                              disabled={Boolean(editingPurchase)}
                               isCurrency={true}
                               min={0}
                               value={item.package_price ?? 0}
                               onChange={val => handleItemChange(idx, 'package_price', val)}
                               placeholder="Rp 0"
-                              className="w-full px-2.5 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700 font-bold text-[11px]"
+                              className={`w-full px-2.5 py-1.5 rounded-xl border font-bold text-[11px] ${
+                                editingPurchase
+                                  ? 'bg-stone-100 dark:bg-stone-800/60 border-stone-200 dark:border-stone-800 text-stone-500 cursor-not-allowed'
+                                  : 'bg-stone-50 dark:bg-[#171514] border-stone-300 dark:border-stone-700'
+                              }`}
                             />
                           </div>
                         </div>
@@ -703,7 +763,7 @@ export const PurchasesPage: React.FC = () => {
                   type="submit"
                   className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-extrabold shadow-md transition-all cursor-pointer"
                 >
-                  {editingPurchase ? 'Simpan Perubahan' : 'Simpan & Tambah Stok'}
+                  {editingPurchase ? 'Simpan Catatan & Supplier' : 'Simpan & Tambah Stok'}
                 </button>
               </div>
             </form>
@@ -794,9 +854,11 @@ export const PurchasesPage: React.FC = () => {
       {/* Confirmation Dialog for Delete */}
       <ConfirmDialog
         isOpen={!!deletingPurchase}
-        title="Hapus Nota Pembelian?"
-        message={`Penghapusan nota "${deletingPurchase?.purchase_number}" akan otomatis MENGURANGI/MENGEMBALIKAN stok yang sebelumnya ditambahkan. Lanjutkan?`}
-        confirmText="Ya, Hapus & Revert Stok"
+        title="Pembatalan Nota Dibatasi"
+        message={`Demi menjaga integritas nilai buku persediaan (Weighted Average Cost), nota pembelian #${deletingPurchase?.purchase_number} yang telah dibukukan tidak dapat dihapus atau dibatalkan. Jika terdapat selisih fisik barang di booth, lakukan Penyesuaian Stok di menu Inventaris.`}
+        confirmText="Coba Batalkan"
+        cancelText="Tutup"
+        isDanger={true}
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeletingPurchase(null)}
       />

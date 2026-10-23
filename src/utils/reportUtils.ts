@@ -1,4 +1,5 @@
 import { Order, OrderItem, OrderHPPSource, Purchase, Product, Recipe, Stock, Settings } from '../types';
+import { calculateGrossAmount, convertUnitQuantity, roundToRupiah } from './hppCalculation';
 
 export type DateFilterType = 'today' | 'week' | 'month' | 'custom';
 
@@ -28,6 +29,9 @@ export interface ReportData {
   startDateStr: string;
   endDateStr: string;
   filterType: DateFilterType;
+  filterUserId?: string;
+  filterUserName?: string;
+  filterUserRole?: string;
 
   // Overview KPIs
   totalSales: number;
@@ -77,11 +81,22 @@ export interface ReportData {
   // Data List
   filteredOrders: Order[];
   transactionDetailOrders: Order[];
+  transactionDetails: ReportTransactionDetailItem[];
   filteredPurchases: Purchase[];
   periodRefundOrders: Order[];
 
   // Snapshot Kondisi Stok Saat Ini
   lowStocks: Stock[];
+}
+
+export interface ReportTransactionDetailItem {
+  order: Order;
+  omzet: number;
+  hpp: number;
+  grossProfit: number;
+  marginPercent: number;
+  hppCategory: HPPCategory;
+  hppCategoryLabel: string;
 }
 
 /**
@@ -193,25 +208,34 @@ export function calculateItemUnitHPP(
     for (const ing of recipe.ingredients) {
       if (!ing.stock_id) continue;
       const stockItem = stocks.find(s => s.id != null && String(s.id) === String(ing.stock_id));
-      if (stockItem && typeof stockItem.cost_per_unit === 'number' && stockItem.cost_per_unit > 0) {
-        recipeCost += (Number(ing.amount) || 0) * stockItem.cost_per_unit;
+      if (stockItem && typeof stockItem.cost_per_unit === 'number' && stockItem.cost_per_unit >= 0) {
+        // Hitung kuantitas bruto dengan persentase susut (waste)
+        const grossAmount = calculateGrossAmount(Number(ing.amount) || 0, ing.waste_percentage);
+        // Konversi ke satuan dasar stok jika satuan berbeda
+        const convertedAmount = convertUnitQuantity(
+          grossAmount,
+          ing.unit || stockItem.unit,
+          stockItem.unit,
+          { stockName: stockItem.name }
+        );
+        recipeCost += convertedAmount * stockItem.cost_per_unit;
         hasValidStockCost = true;
       }
     }
 
     if (hasValidStockCost && recipeCost > 0) {
-      return { unitCost: Math.round(recipeCost), isEstimatedFallback: false };
+      return { unitCost: roundToRupiah(recipeCost), isEstimatedFallback: false };
     }
   }
 
   // 2. Cek apakah master product memiliki cost_price valid
   const prd = products.find(p => p.id != null && String(p.id) === String(productId));
   if (prd && typeof prd.cost_price === 'number' && prd.cost_price > 0) {
-    return { unitCost: Math.round(prd.cost_price), isEstimatedFallback: false };
+    return { unitCost: roundToRupiah(prd.cost_price), isEstimatedFallback: false };
   }
 
   // 3. Fallback estimasi 40% dari harga jual jika data modal tidak tersedia / tidak valid
-  return { unitCost: Math.round(numericPrice * 0.4), isEstimatedFallback: true };
+  return { unitCost: roundToRupiah(numericPrice * 0.4), isEstimatedFallback: true };
 }
 
 /**
@@ -246,11 +270,11 @@ export function getOrderTotalHPP(
           recipes,
           stocks
         );
-        const roundedUnit = Math.round(unitCost);
+        const roundedUnit = roundToRupiah(unitCost);
         orderHPP += roundedUnit * (Number(item.qty) || 1);
       }
     }
-    return Math.round(orderHPP);
+    return roundToRupiah(orderHPP);
   }
 
   return 0;
@@ -361,6 +385,40 @@ export function getOrderHPPMetadata(order: Order): {
 }
 
 /**
+ * Mengambil ringkasan finansial transaksi (omzet, HPP, laba kotor, margin, kategori)
+ * secara konsisten dengan definisi laporan finansial.
+ */
+export function getOrderFinancials(
+  order: Order,
+  products: Product[] = [],
+  recipes: Recipe[] = [],
+  stocks: Stock[] = []
+): ReportTransactionDetailItem {
+  const isRefunded = order.payment?.status === 'refunded';
+  const omzet = isRefunded ? 0 : (Number(order.total_amount) || 0);
+  const hpp = getOrderTotalHPP(order, products, recipes, stocks);
+  const grossProfit = omzet - hpp;
+  const marginPercent = omzet > 0 ? Math.round((grossProfit / omzet) * 1000) / 10 : 0;
+  const hppCategory = getOrderHPPCategory(order);
+  const hppCategoryLabel =
+    hppCategory === 'snapshot_riil'
+      ? 'Snapshot Riil'
+      : hppCategory === 'partial_snapshot'
+      ? 'Partial Snapshot'
+      : 'Estimasi Legacy';
+
+  return {
+    order,
+    omzet,
+    hpp,
+    grossProfit,
+    marginPercent,
+    hppCategory,
+    hppCategoryLabel,
+  };
+}
+
+/**
  * Mengambil atau menghitung HPP untuk satu OrderItem.
  * Mengikuti kebijakan resmi Unit-First Integer Policy:
  * unitCost dibulatkan ke integer Rupiah terlebih dahulu, lalu dikalikan qty.
@@ -412,7 +470,11 @@ export function computeReportData({
   stocks,
   dateFilter,
   startDate,
-  endDate
+  endDate,
+  userId = 'all',
+  userName,
+  userRole,
+  settings
 }: {
   orders: Order[];
   purchases: Purchase[];
@@ -422,23 +484,33 @@ export function computeReportData({
   dateFilter: DateFilterType;
   startDate: string;
   endDate: string;
+  userId?: string;
+  userName?: string;
+  userRole?: string;
   settings?: Settings;
 }): ReportData {
   const { start, end, label, startFormatted, endFormatted } = getPeriodRange(dateFilter, startDate, endDate);
 
-  // 1. Filter Orders berdasarkan created_at
-  const periodAllOrders = orders.filter(o => isDateInRange(o.created_at, start, end));
+  // Helper filter kasir / pengguna berdasarkan created_by_user_id
+  const matchesUser = (order: Order): boolean => {
+    if (!userId || userId === 'all') return true;
+    if (userId === 'unassigned') {
+      return !order.created_by_user_id || order.created_by_user_id.trim() === '';
+    }
+    return order.created_by_user_id === userId;
+  };
+
+  // 1. Filter Orders berdasarkan created_at DAN filter pengguna
+  const periodAllOrders = orders.filter(o => isDateInRange(o.created_at, start, end) && matchesUser(o));
   const filteredOrders = periodAllOrders.filter(o => o.payment?.status !== 'refunded');
 
   // 2. Filter Purchases berdasarkan date atau created_at
   const filteredPurchases = purchases.filter(p => isDateInRange(p.date || p.created_at, start, end));
 
-  // 3. Filter Pengembalian Dana (Refund) yang dieksekusi dalam periode ini:
-  // - Transaksi dengan refunded_at valid dievaluasi berdasarkan tanggal refund dieksekusi (refund lintas hari).
-  // - Data lama berstatus refunded tanpa refunded_at valid dievaluasi berdasarkan created_at
-  //   agar tercatat pada periode transaksi asalnya tanpa mengarang tanggal refund (tetap '-' pada UI/ekspor).
+  // 3. Filter Pengembalian Dana (Refund) yang dieksekusi dalam periode ini DAN mencocokkan pengguna:
   const periodRefundOrders = orders.filter(o => {
     if (o.payment?.status !== 'refunded') return false;
+    if (!matchesUser(o)) return false;
     const hasValidRefundDate = Boolean(o.refunded_at && !isNaN(new Date(o.refunded_at).getTime()));
     if (hasValidRefundDate) {
       return isDateInRange(o.refunded_at, start, end);
@@ -622,11 +694,18 @@ export function computeReportData({
   // 11. Low Stocks (Snapshot stok saat ini)
   const lowStocks = stocks.filter(s => Number(s.current_amount) <= Number(s.min_amount));
 
+  // 12. Transaction Details (Urutkan dari waktu terbaru ke terlama)
+  const sortedTransactionOrders = [...periodAllOrders].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const transactionDetails = sortedTransactionOrders.map(o => getOrderFinancials(o, products, recipes, stocks));
+
   return {
     periodLabel: label,
     startDateStr: startFormatted,
     endDateStr: endFormatted,
     filterType: dateFilter,
+    filterUserId: userId !== 'all' ? userId : undefined,
+    filterUserName: userId !== 'all' ? (userName || (userId === 'unassigned' ? 'Tidak Diketahui / Sistem' : userId)) : undefined,
+    filterUserRole: userId !== 'all' ? userRole : undefined,
     totalSales,
     totalOrdersCount,
     avgOrderValue,
@@ -652,7 +731,8 @@ export function computeReportData({
     orderTypeBreakdown,
     topProducts,
     filteredOrders: [...filteredOrders].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
-    transactionDetailOrders: [...periodAllOrders].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    transactionDetailOrders: sortedTransactionOrders,
+    transactionDetails,
     filteredPurchases: [...filteredPurchases].sort((a, b) => new Date(b.date || b.created_at).getTime() - new Date(a.date || a.created_at).getTime()),
     periodRefundOrders: [...periodRefundOrders].sort((a, b) => new Date(b.refunded_at || b.created_at).getTime() - new Date(a.refunded_at || a.created_at).getTime()),
     lowStocks

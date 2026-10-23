@@ -1,4 +1,5 @@
 import { MockStoreState } from '../types';
+import { validateShiftExpensesList } from '../../utils/shiftExpenseValidation';
 
 export const DEMO_STORAGE_KEY = 'boothdaily_demo_store';
 
@@ -269,6 +270,30 @@ export function loadPersistedSnapshot(): StorageLoadResult {
 
     if (!parsed.settings || typeof parsed.settings !== 'object') {
       missingFields.push('settings');
+    }
+
+    // Normalisasi & Validasi expenses (Single Source of Truth Petty Cash)
+    if (typeof parsed.expenses === 'undefined') {
+      // Kondisi A: Data lama yang sah (belum memiliki expenses) dinormalisasi aman ke array kosong
+      parsed.expenses = [];
+    } else if (!Array.isArray(parsed.expenses)) {
+      // Kondisi B: Field ada tetapi bukan array (Data rusak / anomali)
+      missingFields.push('expenses');
+    } else {
+      // Kondisi C: Array ada, validasi integritas setiap entri secara mendalam
+      const shiftIds = Array.isArray(parsed.shifts)
+        ? new Set<string>(parsed.shifts.map((s: any) => String(s.id)))
+        : undefined;
+      const userIds = Array.isArray(parsed.users)
+        ? new Set<string>(parsed.users.map((u: any) => String(u.id)))
+        : undefined;
+      const expenseValidation = validateShiftExpensesList(parsed.expenses, {
+        validShiftIds: shiftIds,
+        validUserIds: userIds,
+      });
+      if (!expenseValidation.isValid) {
+        missingFields.push(`expenses_invalid: ${expenseValidation.error}`);
+      }
     }
   }
 

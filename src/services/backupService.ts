@@ -17,6 +17,7 @@ import {
 } from '../mock/persistence/storage';
 import { MockStoreState } from '../mock/types';
 import { User, Category, Product, Stock, Recipe, Shift } from '../types';
+import { validateShiftExpensesList } from '../utils/shiftExpenseValidation';
 
 export const BACKUP_APP_IDENTIFIER = 'booth_daily_backup';
 export const BACKUP_FORMAT_VERSION = 1;
@@ -76,6 +77,7 @@ export interface BackupPreviewSummary {
   shifts_count: number;
   stocks_count: number;
   recipes_count: number;
+  expenses_count?: number;
   has_active_shift: boolean;
   has_app_logo: boolean;
   has_printer_logo: boolean;
@@ -461,7 +463,22 @@ export function validateBackupPayload(payload: any): BackupPayload {
     }
   }
 
-  // 8. Validasi Media (Logo Aplikasi & Printer)
+  // 8. Validasi Pengeluaran Shift (Shift Expenses)
+  if (store.expenses === undefined) {
+    store.expenses = [];
+  } else {
+    if (!Array.isArray(store.expenses)) {
+      throw new Error('Data pengeluaran shift (expenses) tidak valid.');
+    }
+    const validShiftIds = new Set<string>(shiftMap.keys());
+    const validUserIds = new Set<string>(userIds);
+    const expRes = validateShiftExpensesList(store.expenses, { validShiftIds, validUserIds });
+    if (!expRes.isValid) {
+      throw new Error(`Integritas pengeluaran kas rusak: ${expRes.error}`);
+    }
+  }
+
+  // 9. Validasi Media (Logo Aplikasi & Printer)
   if (!media || typeof media !== 'object') {
     throw new Error('Struktur media logo tidak ditemukan dalam payload.');
   }
@@ -506,6 +523,7 @@ function extractSummary(payload: BackupPayload): BackupPreviewSummary {
     shifts_count: payload.store.shifts?.length || 0,
     stocks_count: payload.store.stocks?.length || 0,
     recipes_count: payload.store.recipes?.length || 0,
+    expenses_count: payload.store.expenses?.length || 0,
     has_active_shift: Boolean(payload.store.activeShiftId),
     has_app_logo: Boolean(payload.media.app_logo),
     has_printer_logo: Boolean(payload.media.printer_logo),

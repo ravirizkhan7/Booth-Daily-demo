@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Shift, User } from '../../types';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { Shift, User, ShiftExpense, ShiftExpenseCategory } from '../../types';
 import { shiftService } from '../../services/shiftService';
 import { userService } from '../../services/userService';
 import { ToastType } from './usePOSToast';
@@ -14,6 +14,12 @@ export interface UsePOSShiftProps {
 export const usePOSShift = ({ currentUser, showToast, enabled = true }: UsePOSShiftProps) => {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [activeShift, setActiveShift] = useState<Shift | null>(null);
+  const [shiftExpenses, setShiftExpenses] = useState<ShiftExpense[]>([]);
+
+  const activeExpenses = useMemo(() => {
+    if (!activeShift) return [];
+    return shiftExpenses.filter(e => e.shift_id === activeShift.id);
+  }, [shiftExpenses, activeShift]);
 
   const [isOpenShiftModalOpen, setIsOpenShiftModalOpen] = useState<boolean>(false);
   const [isCloseShiftModalOpen, setIsCloseShiftModalOpen] = useState<boolean>(false);
@@ -44,12 +50,14 @@ export const usePOSShift = ({ currentUser, showToast, enabled = true }: UsePOSSh
 
   const refreshShifts = useCallback(async () => {
     try {
-      const [allShifts, currentActive] = await Promise.all([
+      const [allShifts, currentActive, allExpenses] = await Promise.all([
         shiftService.getShifts(),
         shiftService.getActiveShift(),
+        shiftService.getAllExpenses(),
       ]);
       setShifts(allShifts);
       setActiveShift(currentActive);
+      setShiftExpenses(allExpenses);
     } catch (err) {
       console.warn('[usePOSShift] Gagal memuat data shift:', err);
     }
@@ -228,6 +236,114 @@ export const usePOSShift = ({ currentUser, showToast, enabled = true }: UsePOSSh
     }
   };
 
+  // Aksi Catat Pengeluaran Kas (Petty Cash) Selama Shift
+  const handleRecordShiftExpense = async (payload: {
+    amount: number;
+    category: ShiftExpenseCategory;
+    description: string;
+    receipt_number?: string;
+    pin: string;
+  }): Promise<{ success: boolean; message: string; expense?: ShiftExpense }> => {
+    if (!activeShift || activeShift.status !== 'open') {
+      return { success: false, message: 'Tidak ada shift aktif yang terbuka untuk mencatat pengeluaran.' };
+    }
+
+    const pinAuth = await userService.verifyPin(payload.pin);
+    if (!pinAuth || !pinAuth.user) {
+      return { success: false, message: 'PIN salah. Silakan coba lagi.' };
+    }
+
+    try {
+      const newExpense = await shiftService.recordShiftExpense({
+        shift_id: activeShift.id,
+        amount: payload.amount,
+        category: payload.category,
+        description: payload.description,
+        receipt_number: payload.receipt_number,
+        user: pinAuth.user,
+      });
+
+      setShiftExpenses(prev => [...prev, newExpense]);
+      showToast(`Pengeluaran kas Rp ${payload.amount.toLocaleString('id-ID')} berhasil dicatat!`, 'success');
+      return { success: true, message: 'Pengeluaran kas berhasil dicatat', expense: newExpense };
+    } catch (err: any) {
+      const msg = err.message || 'Gagal mencatat pengeluaran kas';
+      return { success: false, message: msg };
+    }
+  };
+
+  // Aksi Batalkan Pengeluaran Kas (Owner Only)
+  const handleCancelShiftExpense = async (payload: {
+    expense_id: string;
+    cancellation_reason: string;
+    pin: string;
+  }): Promise<{ success: boolean; message: string; expense?: ShiftExpense }> => {
+    const pinAuth = await userService.verifyPin(payload.pin);
+    if (!pinAuth || !pinAuth.user) {
+      return { success: false, message: 'PIN salah. Silakan coba lagi.' };
+    }
+
+    if (pinAuth.user.role !== 'owner') {
+      return { success: false, message: 'Hanya Owner yang berwenang membatalkan pengeluaran kas.' };
+    }
+
+    try {
+      const cancelledExpense = await shiftService.cancelShiftExpense({
+        expense_id: payload.expense_id,
+        cancellation_reason: payload.cancellation_reason,
+        owner_user: pinAuth.user,
+      });
+
+      setShiftExpenses(prev => prev.map(e => (e.id === cancelledExpense.id ? cancelledExpense : e)));
+      showToast('Pengeluaran kas berhasil dibatalkan.', 'success');
+      return { success: true, message: 'Pengeluaran kas berhasil dibatalkan', expense: cancelledExpense };
+    } catch (err: any) {
+      const msg = err.message || 'Gagal membatalkan pengeluaran kas';
+      return { success: false, message: msg };
+    }
+  };
+
+  // Aksi Revisi/Ganti Pengeluaran Kas (Owner Only)
+  const handleReplaceShiftExpense = async (payload: {
+    old_expense_id: string;
+    new_expense: {
+      amount: number;
+      category: ShiftExpenseCategory;
+      description: string;
+      receipt_number?: string;
+    };
+    cancellation_reason: string;
+    pin: string;
+  }): Promise<{ success: boolean; message: string; expense?: ShiftExpense }> => {
+    const pinAuth = await userService.verifyPin(payload.pin);
+    if (!pinAuth || !pinAuth.user) {
+      return { success: false, message: 'PIN salah. Silakan coba lagi.' };
+    }
+
+    if (pinAuth.user.role !== 'owner') {
+      return { success: false, message: 'Hanya Owner yang berwenang merevisi pengeluaran kas.' };
+    }
+
+    try {
+      const result = await shiftService.replaceShiftExpense({
+        old_expense_id: payload.old_expense_id,
+        new_expense: payload.new_expense,
+        cancellation_reason: payload.cancellation_reason,
+        owner_user: pinAuth.user,
+      });
+
+      setShiftExpenses(prev => {
+        const updated = prev.map(e => (e.id === result.cancelled_expense.id ? result.cancelled_expense : e));
+        return [...updated, result.new_expense];
+      });
+      showToast(`Pengeluaran kas berhasil direvisi menjadi Rp ${payload.new_expense.amount.toLocaleString('id-ID')}!`, 'success');
+      return { success: true, message: 'Pengeluaran kas berhasil direvisi', expense: result.new_expense };
+    } catch (err: any) {
+      const msg = err.message || 'Gagal merevisi pengeluaran kas';
+      return { success: false, message: msg };
+    }
+  };
+
   const isShiftActive = Boolean(activeShift && activeShift.status === 'open');
 
   return {
@@ -235,6 +351,9 @@ export const usePOSShift = ({ currentUser, showToast, enabled = true }: UsePOSSh
     setShifts,
     activeShift,
     setActiveShift,
+    shiftExpenses,
+    setShiftExpenses,
+    activeExpenses,
     isShiftActive,
     isOpenShiftModalOpen,
     openOpenShiftModal,
@@ -247,5 +366,8 @@ export const usePOSShift = ({ currentUser, showToast, enabled = true }: UsePOSSh
     closeShift: handleCloseShift,
     reviewShift: handleReviewShift,
     correctShift: handleCorrectShift,
+    recordShiftExpense: handleRecordShiftExpense,
+    cancelShiftExpense: handleCancelShiftExpense,
+    replaceShiftExpense: handleReplaceShiftExpense,
   };
 };

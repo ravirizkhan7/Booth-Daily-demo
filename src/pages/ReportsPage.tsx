@@ -4,14 +4,14 @@ import { formatRupiah, formatDate } from '../utils/formatters';
 import {
   BarChart3, Download, Calendar, TrendingUp, DollarSign, ShoppingBag, Coffee,
   Printer, Layers, CreditCard, AlertTriangle, ArrowDownLeft,
-  ArrowUpRight, ArrowRightLeft, FileText, RotateCcw, Banknote, QrCode, Info
+  ArrowUpRight, ArrowRightLeft, FileText, RotateCcw, Banknote, QrCode, Info, User as UserIcon
 } from 'lucide-react';
 import { orderService } from '../services/orderService';
 import { Order } from '../types';
 import { computeReportData, DateFilterType } from '../utils/reportUtils';
 
 export const ReportsPage: React.FC = () => {
-  const { orders, products, stocks, purchases, recipes, settings, currentUser, showToast, openReceiptModal } = usePOS();
+  const { orders, products, stocks, purchases, recipes, settings, currentUser, usersList, showToast, openReceiptModal } = usePOS();
 
   const [dateFilter, setDateFilter] = useState<DateFilterType>('month');
   const [activeTab, setActiveTab] = useState<'all' | 'sales' | 'purchases' | 'transactions' | 'refunds'>('all');
@@ -78,6 +78,91 @@ export const ReportsPage: React.FC = () => {
     };
   }, [dateFilter, startDate, endDate, orders]);
 
+  const [selectedUserId, setSelectedUserId] = useState<string>('all');
+
+  // User filter options for "Pengguna/Kasir"
+  interface UserFilterOption {
+    id: string; // 'all' | 'unassigned' | user.id
+    label: string;
+    name: string;
+    role?: string;
+  }
+
+  const userOptions = useMemo<UserFilterOption[]>(() => {
+    const options: UserFilterOption[] = [
+      { id: 'all', label: 'Semua pengguna', name: 'Semua pengguna' }
+    ];
+
+    const userMap = new Map<string, { name: string; role?: string }>();
+
+    // 1. Known users from usersList
+    if (Array.isArray(usersList)) {
+      usersList.forEach(u => {
+        if (u && u.id) {
+          const roleLabel = u.role === 'owner' ? 'Owner' : u.role === 'karyawan' ? 'Karyawan' : u.role;
+          userMap.set(u.id, {
+            name: u.name,
+            role: roleLabel
+          });
+        }
+      });
+    }
+
+    // 2. Add currentUser if not in list
+    if (currentUser && currentUser.id && !userMap.has(currentUser.id)) {
+      const roleLabel = currentUser.role === 'owner' ? 'Owner' : currentUser.role === 'karyawan' ? 'Karyawan' : currentUser.role;
+      userMap.set(currentUser.id, {
+        name: currentUser.name,
+        role: roleLabel
+      });
+    }
+
+    // 3. Scan historical orders for any users not in current usersList
+    const allKnownOrders = [...(orders || []), ...(reportOrders || [])];
+    allKnownOrders.forEach(o => {
+      if (o.created_by_user_id && o.created_by_user_id.trim() !== '' && !userMap.has(o.created_by_user_id)) {
+        const roleLabel = o.created_by_role === 'owner' ? 'Owner' : o.created_by_role === 'karyawan' ? 'Karyawan' : (o.created_by_role || 'Karyawan');
+        userMap.set(o.created_by_user_id, {
+          name: o.created_by_name || `Pengguna (${o.created_by_user_id.slice(0, 6)})`,
+          role: roleLabel
+        });
+      }
+    });
+
+    // Sort known users: Owner first, then alphabetically by name
+    const sortedEntries = Array.from(userMap.entries()).sort((a, b) => {
+      const isAOwner = a[1].role === 'Owner';
+      const isBOwner = b[1].role === 'Owner';
+      if (isAOwner && !isBOwner) return -1;
+      if (!isAOwner && isBOwner) return 1;
+      return a[1].name.localeCompare(b[1].name);
+    });
+
+    sortedEntries.forEach(([id, info]) => {
+      const roleBadge = info.role ? ` (${info.role})` : '';
+      options.push({
+        id,
+        label: `${info.name}${roleBadge}`,
+        name: info.name,
+        role: info.role
+      });
+    });
+
+    // 4. Option for legacy transactions whose creator cannot be reliably identified
+    options.push({
+      id: 'unassigned',
+      label: 'Tidak Diketahui / Sistem',
+      name: 'Tidak Diketahui / Sistem',
+      role: 'Sistem / Legacy'
+    });
+
+    return options;
+  }, [usersList, currentUser, orders, reportOrders]);
+
+  const selectedUserOption = useMemo(() => {
+    return userOptions.find(o => o.id === selectedUserId) || userOptions[0];
+  }, [userOptions, selectedUserId]);
+
   // Single Source of Truth Report Data
   const reportData = useMemo(() => {
     return computeReportData({
@@ -89,9 +174,12 @@ export const ReportsPage: React.FC = () => {
       dateFilter,
       startDate,
       endDate,
+      userId: selectedUserId,
+      userName: selectedUserOption.id !== 'all' ? selectedUserOption.name : undefined,
+      userRole: selectedUserOption.id !== 'all' ? selectedUserOption.role : undefined,
       settings
     });
-  }, [reportOrders, purchases, products, recipes, stocks, dateFilter, startDate, endDate, settings]);
+  }, [reportOrders, purchases, products, recipes, stocks, dateFilter, startDate, endDate, selectedUserId, selectedUserOption, settings]);
 
   // Export Excel (.xlsx) — On-Demand Dynamic Import
   const handleExportXLSX = async () => {
@@ -233,6 +321,42 @@ export const ReportsPage: React.FC = () => {
               </span>
             )}
           </div>
+        </div>
+
+        {/* User / Cashier Filter Row */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2.5 border-t border-stone-100 dark:border-stone-800/80">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <UserIcon className="w-4 h-4 text-[#C68B59] shrink-0" />
+            <label htmlFor="user-filter-select" className="text-xs font-bold text-stone-600 dark:text-stone-300 whitespace-nowrap">
+              Pengguna/Kasir:
+            </label>
+            <select
+              id="user-filter-select"
+              value={selectedUserId}
+              onChange={e => setSelectedUserId(e.target.value)}
+              className="px-3 py-1.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-200 dark:border-stone-800 text-xs font-bold text-stone-800 dark:text-stone-200 focus:outline-none focus:ring-2 focus:ring-[#C68B59] cursor-pointer"
+            >
+              {userOptions.map(opt => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {selectedUserId !== 'all' && (
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#C68B59]/10 text-[#C68B59] border border-[#C68B59]/30 rounded-xl text-xs font-bold">
+              <span>Filter Kasir Aktif: <strong>{selectedUserOption.label}</strong></span>
+              <button
+                type="button"
+                onClick={() => setSelectedUserId('all')}
+                className="hover:underline text-[11px] font-extrabold cursor-pointer ml-1 text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"
+                title="Kembalikan ke semua pengguna"
+              >
+                (Reset ke Semua)
+              </button>
+            </div>
+          )}
         </div>
 
         {/* View Focus Tabs */}
@@ -715,7 +839,7 @@ export const ReportsPage: React.FC = () => {
           </div>
 
           <div className="overflow-x-auto max-h-[480px]">
-            <table className="w-full text-left text-xs min-w-[750px]">
+            <table className="w-full text-left text-xs min-w-[950px]">
               <thead className="bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="p-3">No. Pesanan</th>
@@ -726,17 +850,21 @@ export const ReportsPage: React.FC = () => {
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Subtotal</th>
                   <th className="p-3 text-right">Total Akhir</th>
+                  <th className="p-3 text-right">HPP (Rp)</th>
+                  <th className="p-3 text-right">Laba Kotor (Rp)</th>
+                  <th className="p-3 text-center">Kualitas HPP</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100 dark:divide-stone-800 font-medium">
-                {reportData.transactionDetailOrders.length === 0 ? (
+                {reportData.transactionDetails.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-stone-400 font-semibold">
+                    <td colSpan={11} className="p-6 text-center text-stone-400 font-semibold">
                       Belum ada transaksi penjualan pada periode ini.
                     </td>
                   </tr>
                 ) : (
-                  reportData.transactionDetailOrders.map(o => {
+                  reportData.transactionDetails.map(d => {
+                    const o = d.order;
                     const isRefunded = o.payment?.status === 'refunded';
                     return (
                       <tr
@@ -759,7 +887,7 @@ export const ReportsPage: React.FC = () => {
                           {formatDate(o.created_at)}
                         </td>
                         <td className="p-3 text-stone-700 dark:text-stone-300 font-semibold">
-                          {o.created_by_name || 'Kasir'}
+                          {o.created_by_name || (o.created_by_user_id ? 'Kasir' : 'Tidak Diketahui / Sistem')}
                         </td>
                         <td className="p-3">
                           <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${o.order_type === 'take_away'
@@ -802,21 +930,49 @@ export const ReportsPage: React.FC = () => {
                             </span>
                           )}
                         </td>
+                        <td className="p-3 text-right font-bold text-stone-800 dark:text-stone-200 text-xs">
+                          {formatRupiah(d.hpp)}
+                        </td>
+                        <td className={`p-3 text-right font-black text-xs ${
+                          d.grossProfit >= 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-rose-600 dark:text-rose-400'
+                        }`}>
+                          {formatRupiah(d.grossProfit)}
+                        </td>
+                        <td className="p-3 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold whitespace-nowrap ${
+                            d.hppCategory === 'snapshot_riil'
+                              ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
+                              : d.hppCategory === 'partial_snapshot'
+                              ? 'bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800'
+                              : 'bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800'
+                          }`}>
+                            {d.hppCategoryLabel}
+                          </span>
+                        </td>
                       </tr>
                     );
                   })
                 )}
               </tbody>
-              {reportData.transactionDetailOrders.length > 0 && (
+              {reportData.transactionDetails.length > 0 && (
                 <tfoot className="bg-stone-50 dark:bg-[#23201D] border-t-2 border-stone-200 dark:border-stone-700 font-black text-xs sticky bottom-0 z-10">
                   <tr>
                     <td colSpan={4} className="p-3 text-stone-800 dark:text-stone-200">
-                      TOTAL PENJUALAN PERIODE ({reportData.totalOrdersCount} TRANSAKSI SELESAI)
+                      TOTAL PERIODE{selectedUserId !== 'all' ? ` — ${selectedUserOption.name}` : ''} ({reportData.totalOrdersCount} TRANSAKSI SELESAI)
                     </td>
                     <td colSpan={3}></td>
                     <td className="p-3 text-right text-emerald-600 dark:text-emerald-400 text-sm">
                       {formatRupiah(reportData.totalSales)}
                     </td>
+                    <td className="p-3 text-right text-[#3B2A1F] dark:text-[#D4A373] text-sm">
+                      {formatRupiah(reportData.totalEstimatedHPP)}
+                    </td>
+                    <td className="p-3 text-right text-emerald-600 dark:text-emerald-400 text-sm">
+                      {formatRupiah(reportData.estimatedGrossProfit)}
+                    </td>
+                    <td className="p-3"></td>
                   </tr>
                 </tfoot>
               )}
