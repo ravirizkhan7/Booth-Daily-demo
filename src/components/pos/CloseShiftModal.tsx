@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { usePOS } from '../../hooks/usePOS';
 import { Shift } from '../../types';
 import { formatRupiah, formatDateTime } from '../../utils/formatters';
@@ -7,7 +7,6 @@ import { NumberInput } from '../common/NumberInput';
 import { PinKeypad } from '../common/PinKeypad';
 import {
   X,
-  Delete,
   ShieldAlert,
   Lock,
   ArrowLeft,
@@ -33,7 +32,6 @@ export const CloseShiftModal: React.FC = () => {
     products,
     recipes,
     stocks,
-    currentUser,
   } = usePOS();
 
   // Modal Step: 'input' | 'pin' | 'success'
@@ -54,6 +52,94 @@ export const CloseShiftModal: React.FC = () => {
 
   // Completed Closed Shift (for final Z-Report view)
   const [closedShiftResult, setClosedShiftResult] = useState<Shift | null>(null);
+
+  // F-08 Focus Management & Escape Refs
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  // Keep latest input & submission state in ref to avoid stale closures in event listeners without re-running focus effects
+  const latestStateRef = useRef({
+    isSubmitting,
+    step,
+    actualCashInput,
+    actualQrisInput,
+    actualRefundInput,
+    notesInput,
+  });
+  latestStateRef.current = {
+    isSubmitting,
+    step,
+    actualCashInput,
+    actualQrisInput,
+    actualRefundInput,
+    notesInput,
+  };
+
+  const handleGuardedClose = () => {
+    const { isSubmitting: submitting, step: currentStep, actualCashInput: cash, actualQrisInput: qris, actualRefundInput: refund, notesInput: notes } = latestStateRef.current;
+    if (submitting) return;
+    if (currentStep === 'success') {
+      closeCloseShiftModal();
+      return;
+    }
+    const isDirty = cash.trim() !== '' || qris.trim() !== '' || refund.trim() !== '' || notes.trim() !== '';
+    if (isDirty) {
+      if (window.confirm('Batalkan proses penutupan shift? Nominal rekonsiliasi yang telah diinput akan dibatalkan.')) {
+        closeCloseShiftModal();
+      }
+    } else {
+      closeCloseShiftModal();
+    }
+  };
+
+  // F-08 Focus Trap & GUARDED_CONFIRM_REQUIRED Escape Handling
+  useEffect(() => {
+    if (!isCloseShiftModalOpen) return;
+    triggerRef.current = document.activeElement as HTMLElement | null;
+
+    const timer = setTimeout(() => {
+      const focusTarget = modalRef.current?.querySelector<HTMLInputElement | HTMLButtonElement>(
+        'input:not([disabled]), button:not([aria-label*="Tutup"])'
+      );
+      focusTarget?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (latestStateRef.current.isSubmitting) return;
+        e.preventDefault();
+        handleGuardedClose();
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (triggerRef.current && typeof triggerRef.current.focus === 'function') {
+        triggerRef.current.focus();
+      }
+    };
+  }, [isCloseShiftModalOpen]);
 
   // Reset inputs when modal opens
   useEffect(() => {
@@ -134,23 +220,6 @@ export const CloseShiftModal: React.FC = () => {
     setStep('input');
   };
 
-  const handleKeyClick = (num: string) => {
-    if (pin.length < 4) {
-      setPin(prev => prev + num);
-      setErrorMessage('');
-    }
-  };
-
-  const handleDelete = () => {
-    setPin(prev => prev.slice(0, -1));
-    setErrorMessage('');
-  };
-
-  const handleClear = () => {
-    setPin('');
-    setErrorMessage('');
-  };
-
   const handleConfirmCloseShift = async () => {
     if (pin.length !== 4) {
       setErrorMessage('Masukkan 4 digit PIN petugas penutup.');
@@ -211,6 +280,10 @@ export const CloseShiftModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
       <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="close-shift-modal-title"
         className="relative w-full max-w-xl bg-[#F7F5F2] dark:bg-[#1A1816] rounded-3xl shadow-2xl border border-stone-300 dark:border-stone-800 overflow-hidden flex flex-col max-h-[92vh] my-auto"
         onClick={e => e.stopPropagation()}
       >
@@ -218,10 +291,10 @@ export const CloseShiftModal: React.FC = () => {
         <div className="px-6 py-4 bg-[#3B2A1F] text-[#F7F5F2] flex justify-between items-center shrink-0 border-b border-stone-800">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-[#D4A373]/20 flex items-center justify-center border border-[#D4A373]/30">
-              <Lock className="w-5 h-5 text-[#D4A373]" />
+              <Lock className="w-5 h-5 text-[#D4A373]" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-black tracking-wide">
+              <h2 id="close-shift-modal-title" className="text-base font-black tracking-wide">
                 {step === 'success' ? 'Shift Resmi Ditutup' : `Tutup Shift #${activeShift?.shift_number || ''}`}
               </h2>
               <p className="text-xs text-[#D4A373]/90 font-medium">
@@ -233,11 +306,12 @@ export const CloseShiftModal: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={closeCloseShiftModal}
-            className="p-2 rounded-xl hover:bg-white/10 text-stone-300 transition-colors cursor-pointer"
-            aria-label="Tutup Modal"
+            disabled={isSubmitting}
+            onClick={handleGuardedClose}
+            className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl hover:bg-white/10 text-stone-300 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#D4A373] disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Tutup modal tutup shift"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -641,7 +715,7 @@ export const CloseShiftModal: React.FC = () => {
             <div className="p-3.5 sm:p-4 bg-white dark:bg-[#161413] border-t border-stone-200 dark:border-stone-800 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 shrink-0">
               <button
                 type="button"
-                onClick={closeCloseShiftModal}
+                onClick={handleGuardedClose}
                 className="w-full sm:w-auto px-5 py-3 rounded-2xl border border-stone-200 dark:border-stone-800 font-bold text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer text-center"
               >
                 Batal

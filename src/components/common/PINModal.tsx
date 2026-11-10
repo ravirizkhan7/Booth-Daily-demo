@@ -1,6 +1,5 @@
-import { NumberInput } from './NumberInput';
 import { PinKeypad } from './PinKeypad';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { usePOS } from '../../hooks/usePOS';
 import { PaymentMethod } from '../../types';
 import { formatRupiah } from '../../utils/formatters';
@@ -27,6 +26,59 @@ export const PINModal: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
+  // F-08 Focus Management & STRICT_PREVENT_ESCAPE Refs
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  // F-08 Focus Management & STRICT_PREVENT_ESCAPE Policy
+  useEffect(() => {
+    if (!isPinModalOpen) return;
+    triggerRef.current = document.activeElement as HTMLElement | null;
+
+    // Set initial focus to cash input if present or first button
+    const timer = setTimeout(() => {
+      const focusTarget = modalRef.current?.querySelector<HTMLInputElement | HTMLButtonElement>(
+        'input[type="text"], button:not([aria-label*="Tutup"])'
+      );
+      focusTarget?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // STRICT_PREVENT_ESCAPE: Prevent closing financial transaction via accidental Escape key
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (triggerRef.current && typeof triggerRef.current.focus === 'function') {
+        triggerRef.current.focus();
+      }
+    };
+  }, [isPinModalOpen]);
+
   useEffect(() => {
     if (isPinModalOpen) {
       setPin('');
@@ -41,7 +93,8 @@ export const PINModal: React.FC = () => {
   const totalItemTypes = cart.length;
   const totalItemQty = cart.reduce((sum, item) => sum + item.qty, 0);
   const rawSubtotal = cart.reduce((sum, item) => sum + item.product.price * item.qty, 0);
-  const isVip = orderArea === 'vip';
+  const isTakeAway = orderType === 'take_away';
+  const isVip = !isTakeAway && orderArea === 'vip';
   const {
     subtotal,
     discount,
@@ -52,22 +105,32 @@ export const PINModal: React.FC = () => {
     serviceChargePercentage,
     totalAmount,
   } = calculateOrderPreview(rawSubtotal, discountRules, settings?.tax_percentage ?? 0, {
+    orderType,
     isVip,
-    vipDiscountPercentage: settings?.vip_discount_percentage,
     vipTaxPercentage: settings?.vip_tax_percentage,
     vipServiceChargePercentage: settings?.vip_room_service_charge_percentage,
   });
 
-  const parsedAmountPaid = selectedMethod === 'cash'
-    ? (() => {
-        if (!amountPaidInput || !amountPaidInput.trim()) return totalAmount;
-        const clean = amountPaidInput.replace(/\D/g, '');
-        if (!clean) return totalAmount;
-        const num = parseInt(clean, 10);
-        return isNaN(num) || num <= 0 ? totalAmount : num;
-      })()
+  const isCash = selectedMethod === 'cash';
+  const rawCashInput = amountPaidInput.trim();
+  const withoutRp = rawCashInput.replace(/^rp\.?\s*/i, '').trim();
+  const hasInvalidChars = Boolean(rawCashInput && (/[^\d.,\s]/.test(withoutRp) || withoutRp.replace(/\D/g, '') === ''));
+  const cleanDigits = withoutRp.replace(/\D/g, '');
+  const parsedNum = cleanDigits ? parseInt(cleanDigits, 10) : 0;
+
+  // 1. Empty / whitespace -> intentional default Uang Pas
+  const isCashEmpty = isCash && rawCashInput === '';
+  // 2. Invalid chars (letters, symbols, non-numeric)
+  const isCashInvalid = isCash && !isCashEmpty && (hasInvalidChars || isNaN(parsedNum));
+  // 3. User entered 0
+  const isCashZero = isCash && !isCashEmpty && !isCashInvalid && parsedNum === 0;
+
+  const parsedAmountPaid = isCash
+    ? (isCashEmpty ? totalAmount : (isCashInvalid ? 0 : parsedNum))
     : totalAmount;
 
+  const isCashShort = isCash && !isCashInvalid && (parsedAmountPaid < totalAmount || isCashZero);
+  const shortageAmount = isCashShort ? Math.max(0, totalAmount - parsedAmountPaid) : 0;
   const changeAmount = Math.max(0, parsedAmountPaid - totalAmount);
 
   const handleKeyClick = (num: string) => {
@@ -89,6 +152,18 @@ export const PINModal: React.FC = () => {
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+
+    if (isCash) {
+      if (isCashInvalid) {
+        setErrorMessage('Nominal pembayaran tunai tidak valid! Masukkan angka yang sah.');
+        return;
+      }
+      if (isCashShort || parsedAmountPaid < totalAmount) {
+        setErrorMessage(`Uang pembayaran tunai kurang! Diterima ${formatRupiah(parsedAmountPaid)}, total tagihan ${formatRupiah(totalAmount)}.`);
+        return;
+      }
+    }
+
     if (pin.length !== 4) {
       setErrorMessage('Masukkan 4 digit PIN');
       return;
@@ -112,6 +187,11 @@ export const PINModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
       <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pin-modal-title"
+        aria-describedby="pin-modal-desc"
         className="relative w-full max-w-lg bg-[#F7F5F2] dark:bg-[#1A1816] rounded-3xl shadow-2xl border border-stone-300 dark:border-stone-800 overflow-hidden flex flex-col max-h-[92vh] my-auto"
         onClick={e => e.stopPropagation()}
       >
@@ -119,19 +199,21 @@ export const PINModal: React.FC = () => {
         <div className="px-6 py-4 bg-[#3B2A1F] text-[#F7F5F2] flex justify-between items-center shrink-0 border-b border-stone-800">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-[#D4A373]/20 flex items-center justify-center border border-[#D4A373]/30">
-              <Lock className="w-5 h-5 text-[#D4A373]" />
+              <Lock className="w-5 h-5 text-[#D4A373]" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-black tracking-wide">Verifikasi Transaksi</h2>
-              <p className="text-xs text-[#D4A373]/90 font-medium">Langkah Terakhir Pembayaran</p>
+              <h2 id="pin-modal-title" className="text-base font-black tracking-wide">Verifikasi Transaksi</h2>
+              <p id="pin-modal-desc" className="text-xs text-[#D4A373]/90 font-medium">Langkah Terakhir Pembayaran</p>
             </div>
           </div>
           <button
             type="button"
-            onClick={closePinModal}
-            className="p-2 rounded-xl hover:bg-white/10 text-stone-300 transition-colors cursor-pointer"
+            disabled={isSubmitting}
+            onClick={() => !isSubmitting && closePinModal()}
+            aria-label="Tutup modal verifikasi transaksi"
+            className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl hover:bg-white/10 text-stone-300 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#D4A373] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -144,6 +226,7 @@ export const PINModal: React.FC = () => {
                 RINGKASAN TRANSAKSI
               </span>
               <div className="flex items-center gap-1.5">
+                {orderType === 'dine_in' && (
                 <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full uppercase ${
                   isVip
                     ? 'text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700/50'
@@ -151,6 +234,7 @@ export const PINModal: React.FC = () => {
                 }`}>
                   {isVip ? 'Ruang VIP' : 'Area Umum'}
                 </span>
+                )}
                 <span className="text-[11px] font-extrabold text-[#3B2A1F] dark:text-[#D4A373] bg-[#3B2A1F]/10 dark:bg-[#D4A373]/10 px-2.5 py-0.5 rounded-full uppercase">
                   {orderType === 'dine_in' ? 'Dine In' : 'Take Away'}
                 </span>
@@ -235,7 +319,7 @@ export const PINModal: React.FC = () => {
                     <Banknote className="w-5 h-5 text-[#D4A373]" />
                   </div>
                   <div>
-                    <p className="font-black text-sm leading-tight"><Banknote className="w-4 h-4 mr-2 inline" /> CASH / TUNAI</p>
+                    <p className="font-black text-sm leading-tight">CASH / TUNAI</p>
                     <p className={`text-[10px] font-semibold mt-0.5 ${selectedMethod === 'cash' ? 'text-[#D4A373]' : 'text-stone-400'
                       }`}>
                       Pembayaran Tunai Kasir
@@ -266,7 +350,7 @@ export const PINModal: React.FC = () => {
                     <QrCode className="w-5 h-5 text-[#D4A373]" />
                   </div>
                   <div>
-                    <p className="font-black text-sm leading-tight"><QrCode className="w-4 h-4 mr-2 inline" /> QRIS</p>
+                    <p className="font-black text-sm leading-tight">QRIS</p>
                     <p className={`text-[10px] font-semibold mt-0.5 ${selectedMethod === 'qris' ? 'text-[#D4A373]' : 'text-stone-400'
                       }`}>
                       Scan E-Wallet / Mobile Banking
@@ -284,48 +368,111 @@ export const PINModal: React.FC = () => {
 
           {/* Cash Amount Input if Cash Selected */}
           {selectedMethod === 'cash' && (
-            <div className="space-y-2.5 p-3.5 bg-amber-500/10 rounded-2xl border border-amber-500/20">
-              <label className="block text-xs font-bold text-amber-900 dark:text-amber-300 uppercase">
-                UANG DITERIMA (CASH)
-              </label>
-              <NumberInput
-                value={amountPaidInput ? (parseInt(amountPaidInput.replace(/\D/g, ''), 10) || 0) : 0}
-                onChange={val => setAmountPaidInput(val === 0 ? '' : val.toString())}
-                isCurrency={true}
-                placeholder={`Uang Pas: ${totalAmount.toLocaleString('id-ID')}`}
-                className="w-full px-4 py-2.5 rounded-xl border border-amber-300 dark:border-amber-700 bg-white dark:bg-[#1F1D1B] font-bold text-base text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-              />
+            <div className={`space-y-2.5 p-3.5 rounded-2xl border transition-colors ${
+              isCashInvalid || isCashShort
+                ? 'bg-rose-50 dark:bg-rose-950/20 border-rose-300 dark:border-rose-800/60'
+                : 'bg-amber-500/10 border-amber-500/20'
+            }`}>
+              <div className="flex items-center justify-between">
+                <label className={`block text-xs font-bold uppercase ${
+                  isCashInvalid || isCashShort ? 'text-rose-900 dark:text-rose-300' : 'text-amber-900 dark:text-amber-300'
+                }`}>
+                  UANG DITERIMA (CASH)
+                </label>
+                {isCashInvalid ? (
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-500 text-white animate-pulse">
+                    Input Tidak Valid
+                  </span>
+                ) : isCashShort ? (
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-500 text-white animate-pulse">
+                    Kurang {formatRupiah(shortageAmount)}
+                  </span>
+                ) : null}
+              </div>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-black text-stone-400 text-sm pointer-events-none">
+                  Rp
+                </span>
+                <input
+                  type="text"
+                  value={amountPaidInput}
+                  onChange={(e) => {
+                    setAmountPaidInput(e.target.value);
+                    if (errorMessage) setErrorMessage('');
+                  }}
+                  placeholder={`Uang Pas: ${totalAmount.toLocaleString('id-ID')}`}
+                  className={`w-full pl-10 pr-4 py-2.5 rounded-xl border bg-white dark:bg-[#1F1D1B] font-bold text-base text-stone-900 dark:text-white focus:outline-none focus:ring-2 transition-all ${
+                    isCashInvalid || isCashShort
+                      ? 'border-rose-400 dark:border-rose-700 focus:ring-rose-500'
+                      : 'border-amber-300 dark:border-amber-700 focus:ring-amber-500'
+                  }`}
+                />
+              </div>
               <div className="flex flex-wrap gap-2 pt-0.5">
                 <button
                   type="button"
-                  onClick={() => setAmountPaidInput(String(totalAmount))}
-                  className="px-3 py-1 bg-amber-200/80 dark:bg-amber-900/50 hover:bg-amber-300 text-amber-900 dark:text-amber-200 rounded-lg text-xs font-bold transition-all"
+                  onClick={() => {
+                    setAmountPaidInput(String(totalAmount));
+                    setErrorMessage('');
+                  }}
+                  className="px-3 py-1 bg-amber-200/80 dark:bg-amber-900/50 hover:bg-amber-300 text-amber-900 dark:text-amber-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
                 >
                   Uang Pas
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAmountPaidInput('50000')}
-                  className="px-3 py-1 bg-amber-200/80 dark:bg-amber-900/50 hover:bg-amber-300 text-amber-900 dark:text-amber-200 rounded-lg text-xs font-bold transition-all"
+                  onClick={() => {
+                    setAmountPaidInput('50000');
+                    setErrorMessage('');
+                  }}
+                  className="px-3 py-1 bg-amber-200/80 dark:bg-amber-900/50 hover:bg-amber-300 text-amber-900 dark:text-amber-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
                 >
                   50.000
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAmountPaidInput('100000')}
-                  className="px-3 py-1 bg-amber-200/80 dark:bg-amber-900/50 hover:bg-amber-300 text-amber-900 dark:text-amber-200 rounded-lg text-xs font-bold transition-all"
+                  onClick={() => {
+                    setAmountPaidInput('100000');
+                    setErrorMessage('');
+                  }}
+                  className="px-3 py-1 bg-amber-200/80 dark:bg-amber-900/50 hover:bg-amber-300 text-amber-900 dark:text-amber-200 rounded-lg text-xs font-bold transition-all cursor-pointer"
                 >
                   100.000
                 </button>
               </div>
-              {parsedAmountPaid > 0 && (
-                <div className="flex justify-between items-center text-xs font-bold pt-1.5 border-t border-amber-300/40 text-amber-900 dark:text-amber-300">
-                  <span>Kembalian:</span>
-                  <span className={changeAmount >= 0 ? 'text-emerald-600 dark:text-emerald-400 font-extrabold text-sm' : 'text-rose-600 font-bold'}>
-                    {formatRupiah(changeAmount)}
-                  </span>
-                </div>
-              )}
+              <div className={`flex justify-between items-center text-xs font-bold pt-1.5 border-t ${
+                isCashInvalid || isCashShort
+                  ? 'border-rose-200 dark:border-rose-800/40 text-rose-700 dark:text-rose-400'
+                  : 'border-amber-300/40 text-amber-900 dark:text-amber-300'
+              }`}>
+                <span>
+                  {isCashInvalid
+                    ? 'Status Pembayaran:'
+                    : isCashShort
+                    ? 'Uang Pembayaran Kurang:'
+                    : 'Kembalian:'}
+                </span>
+                <span className={`font-extrabold text-sm ${
+                  isCashInvalid || isCashShort
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}>
+                  {isCashInvalid
+                    ? 'Nominal Tidak Valid'
+                    : isCashShort
+                    ? `-${formatRupiah(shortageAmount)}`
+                    : formatRupiah(changeAmount)}
+                </span>
+              </div>
+              {isCashInvalid ? (
+                <p className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 leading-tight">
+                  Masukkan nominal uang tunai yang sah (hanya angka).
+                </p>
+              ) : isCashShort ? (
+                <p className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 leading-tight">
+                  Nominal uang yang diterima kurang dari total tagihan ({formatRupiah(totalAmount)}).
+                </p>
+              ) : null}
             </div>
           )}
 
@@ -349,22 +496,32 @@ export const PINModal: React.FC = () => {
         <div className="p-3.5 sm:p-4 bg-white dark:bg-[#161413] border-t border-stone-200 dark:border-stone-800 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 shrink-0">
           <button
             type="button"
-            onClick={closePinModal}
-            className="w-full sm:w-auto px-5 py-3 rounded-2xl border border-stone-200 dark:border-stone-800 font-bold text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer text-center"
+            disabled={isSubmitting}
+            onClick={() => !isSubmitting && closePinModal()}
+            className="w-full sm:w-auto px-5 py-3 rounded-2xl border border-stone-200 dark:border-stone-800 font-bold text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer text-center disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Batal
           </button>
           <button
             type="button"
             onClick={() => handleSubmit()}
-            disabled={pin.length !== 4 || isSubmitting}
-            className={`w-full sm:flex-1 py-3.5 px-4 rounded-2xl font-black text-xs text-[#F7F5F2] flex items-center justify-center gap-2 shadow-lg transition-all ${pin.length === 4 && !isSubmitting
-              ? 'bg-[#3B2A1F] hover:bg-[#2A1E16] active:scale-98 cursor-pointer'
-              : 'bg-stone-300 dark:bg-stone-800 text-stone-500 cursor-not-allowed shadow-none'
-              }`}
+            disabled={pin.length !== 4 || isSubmitting || isCashShort || isCashInvalid}
+            className={`w-full sm:flex-1 py-3.5 px-4 rounded-2xl font-black text-xs text-[#F7F5F2] flex items-center justify-center gap-2 shadow-lg transition-all ${
+              pin.length === 4 && !isSubmitting && !isCashShort && !isCashInvalid
+                ? 'bg-[#3B2A1F] hover:bg-[#2A1E16] active:scale-98 cursor-pointer'
+                : 'bg-stone-300 dark:bg-stone-800 text-stone-500 cursor-not-allowed shadow-none'
+            }`}
           >
             <Check className="w-4 h-4 text-[#D4A373] shrink-0" />
-            <span className="truncate">{isSubmitting ? 'Memproses Transaksi...' : `Konfirmasi Pembayaran (${formatRupiah(totalAmount)})`}</span>
+            <span className="truncate">
+              {isSubmitting
+                ? 'Memproses Transaksi...'
+                : isCashInvalid
+                ? 'Nominal Pembayaran Tidak Valid'
+                : isCashShort
+                ? `Uang Pembayaran Kurang (-${formatRupiah(shortageAmount)})`
+                : `Konfirmasi Pembayaran (${formatRupiah(totalAmount)})`}
+            </span>
           </button>
         </div>
       </div>

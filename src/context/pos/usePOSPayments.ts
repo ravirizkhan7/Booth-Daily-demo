@@ -85,10 +85,12 @@ export const usePOSPayments = ({
       // For Guest without auth_token, explicitly use pin_token for the order creation request
       const isGuest = !localStorage.getItem('token');
       const orderToken = isGuest ? pinToken : undefined;
-      const isVip = orderArea === 'vip';
+      const isTakeAway = orderType === 'take_away';
+      const effectiveOrderArea: 'regular' | 'vip' = isTakeAway ? 'regular' : (orderArea || 'regular');
+      const isVip = !isTakeAway && effectiveOrderArea === 'vip';
       const newOrder = await transactionService.processTransaction({
         order_type: orderType,
-        order_area: orderArea,
+        order_area: effectiveOrderArea,
         is_vip: isVip,
         items: itemsPayload,
         payment_method: paymentMethod,

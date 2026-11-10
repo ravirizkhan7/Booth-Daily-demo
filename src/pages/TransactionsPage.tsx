@@ -1,18 +1,46 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { usePOS } from '../hooks/usePOS';
-import { Order, PaymentMethod } from '../types';
+import { Order, PaymentMethod, RefundRequest } from '../types';
 import { formatRupiah, formatDate } from '../utils/formatters';
 import { orderService } from '../services/orderService';
-import { History, Search, Printer, RotateCcw, RefreshCw, TrendingUp, DollarSign, X, CheckCircle2, ShieldCheck, Layers } from 'lucide-react';
-import { ConfirmDialog } from '../components/common/ConfirmDialog';
+import { History, Search, Printer, RotateCcw, RefreshCw, TrendingUp, DollarSign, X, ShieldCheck, Clock } from 'lucide-react';
+import { refundService } from '../services/refundService';
+import { RefundRequestModal } from '../components/transactions/RefundRequestModal';
+import { RefundApprovalQueueModal } from '../components/transactions/RefundApprovalQueueModal';
+import { RefundDisbursementModal } from '../components/transactions/RefundDisbursementModal';
 import { getOrderFinancials, calculateItemUnitHPP } from '../utils/reportUtils';
 
 export const TransactionsPage: React.FC = () => {
-  const { orders, currentUser, openReceiptModal, refundOrder, settings, products, recipes, stocks } = usePOS();
+  const { orders, currentUser, openReceiptModal, refreshData, showToast, settings, products, recipes, stocks, isShiftActive, activeShift } = usePOS();
   const [search, setSearch] = useState('');
   const [filterMethod, setFilterMethod] = useState<string>('all');
   const [refundingOrder, setRefundingOrder] = useState<Order | null>(null);
-  const [isRefunding, setIsRefunding] = useState<boolean>(false);
+  const [disbursingData, setDisbursingData] = useState<{ order: Order; request: RefundRequest } | null>(null);
+  const [isQueueOpen, setIsQueueOpen] = useState<boolean>(false);
+  const [pendingRefundCount, setPendingRefundCount] = useState<number>(0);
+  const [refundRequestsMap, setRefundRequestsMap] = useState<Record<string, RefundRequest>>({});
+
+  const updatePendingCount = async () => {
+    try {
+      const allRequests = await refundService.getRefundRequests();
+      const pending = allRequests.filter(r => r.approval_status === 'pending');
+      setPendingRefundCount(pending.length);
+
+      const map: Record<string, RefundRequest> = {};
+      allRequests.forEach(r => {
+        map[String(r.order_id)] = r;
+      });
+      setRefundRequestsMap(map);
+    } catch {
+      setPendingRefundCount(0);
+      setRefundRequestsMap({});
+    }
+  };
+
+  useEffect(() => {
+    updatePendingCount();
+  }, [orders]);
   const [selectedAuditOrder, setSelectedAuditOrder] = useState<Order | null>(null);
 
   const [dateMode, setDateMode] = useState<'30days' | 'today' | 'custom'>('30days');
@@ -26,6 +54,14 @@ export const TransactionsPage: React.FC = () => {
   const [isLoadingHistorical, setIsLoadingHistorical] = useState<boolean>(false);
 
   const isOwner = currentUser?.role === 'owner';
+  const location = useLocation();
+
+  useEffect(() => {
+    if (location.state?.openRefundQueue && isOwner) {
+      setIsQueueOpen(true);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state, isOwner]);
 
   const handleFetchHistorical = async () => {
     if (!customStart || !customEnd) return;
@@ -62,8 +98,12 @@ export const TransactionsPage: React.FC = () => {
       }
     }
 
-    // If karyawan, show my transactions or today's
-    const matchesUser = isOwner ? true : o.created_by_user_id === currentUser?.id;
+    // If karyawan, show my transactions or approved refunds needing disbursement
+    const req = refundRequestsMap[String(o.id)];
+    const isApprovedNotDisbursed = req?.approval_status === 'approved' && req?.disbursement_status === 'not_disbursed';
+    const matchesUser = isOwner
+      ? true
+      : o.created_by_user_id === currentUser?.id || isApprovedNotDisbursed;
     const matchesSearch = o.order_number.toLowerCase().includes(search.toLowerCase()) ||
       Boolean(o.created_by_name?.toLowerCase().includes(search.toLowerCase())) ||
       (o.customer_name && o.customer_name.toLowerCase().includes(search.toLowerCase()));
@@ -71,27 +111,6 @@ export const TransactionsPage: React.FC = () => {
 
     return matchesUser && matchesSearch && matchesMethod;
   });
-
-  const [refundReason, setRefundReason] = useState<string>('Batal Pelanggan');
-  const [refundMethod, setRefundMethod] = useState<PaymentMethod>('cash');
-
-  const handleConfirmRefund = async () => {
-    if (!refundingOrder || isRefunding) return;
-    if (refundingOrder.payment?.status === 'refunded') return;
-    setIsRefunding(true);
-    try {
-      await refundOrder(refundingOrder.id, {
-        refund_reason: refundReason,
-        refunded_by_name: currentUser?.name || 'Owner',
-        refund_method: refundMethod,
-      });
-    } finally {
-      setIsRefunding(false);
-      setRefundingOrder(null);
-      setRefundMethod('cash');
-      setRefundReason('Batal Pelanggan');
-    }
-  };
 
   return (
     <div className="p-3.5 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
@@ -107,7 +126,46 @@ export const TransactionsPage: React.FC = () => {
               : 'Daftar transaksi yang Anda proses hari ini.'}
           </p>
         </div>
+
+        {isOwner && (
+          <button
+            onClick={() => setIsQueueOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-[#C68B59] hover:bg-[#A97444] text-white text-xs font-bold shadow-md hover:shadow-lg transition-all cursor-pointer relative"
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Antrean Refund</span>
+            {pendingRefundCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse">
+                {pendingRefundCount}
+              </span>
+            )}
+          </button>
+        )}
       </div>
+
+      {isOwner && pendingRefundCount > 0 && (
+        <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-3xl p-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-2xl bg-amber-500 text-white">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs sm:text-sm font-bold text-amber-900 dark:text-amber-200">
+                Terdapat {pendingRefundCount} Pengajuan Refund Menunggu Persetujuan
+              </h4>
+              <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                Periksa bukti foto keluhan dan alasan kasir untuk memberikan keputusan.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsQueueOpen(true)}
+            className="px-4 py-2 rounded-2xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] text-xs font-bold shrink-0 transition-colors cursor-pointer"
+          >
+            Buka Antrean
+          </button>
+        </div>
+      )}
 
       {/* Filter controls */}
       <div className="bg-white dark:bg-[#1E1C1A] p-4 sm:p-5 rounded-3xl border border-stone-200 dark:border-stone-800 shadow-sm space-y-3">
@@ -192,9 +250,10 @@ export const TransactionsPage: React.FC = () => {
 
       {/* Transactions List */}
       <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
+        {/* Desktop Table: scrollable with sticky header */}
+        <div className="hidden md:block overflow-x-auto max-h-[420px] overflow-y-auto">
           <table className="w-full text-left text-xs min-w-[720px]">
-            <thead className="bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-bold uppercase">
+            <thead className="sticky top-0 z-10 bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-bold uppercase">
               <tr>
                 <th className="p-4">No. Transaksi</th>
                 <th className="p-4">Waktu</th>
@@ -208,8 +267,18 @@ export const TransactionsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100 dark:divide-stone-800/60 font-medium">
-              {displayOrders.map(ord => {
+              {displayOrders.length === 0 ? (
+                <tr>
+                  <td colSpan={isOwner ? 9 : 8} className="p-8 text-center text-stone-400 font-semibold">
+                    Tidak ada transaksi ditemukan.
+                  </td>
+                </tr>
+              ) : (
+                displayOrders.map(ord => {
                 const isRefunded = ord.payment?.status === 'refunded';
+                const refundReq = refundRequestsMap[String(ord.id)];
+                const isApprovedNotDisbursed = refundReq?.approval_status === 'approved' && refundReq?.disbursement_status === 'not_disbursed';
+                const isPendingApproval = refundReq?.approval_status === 'pending' || (!refundReq && ord.refund_pending);
                 return (
                   <tr
                     key={ord.id}
@@ -238,9 +307,19 @@ export const TransactionsPage: React.FC = () => {
                       <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
                         isRefunded
                           ? 'bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800'
+                          : isApprovedNotDisbursed
+                          ? 'bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800'
+                          : isPendingApproval
+                          ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800'
                           : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
                       }`}>
-                        {isRefunded ? 'Refunded' : 'Selesai'}
+                        {isRefunded
+                          ? 'Refunded'
+                          : isApprovedNotDisbursed
+                          ? 'Disetujui Owner'
+                          : isPendingApproval
+                          ? 'Menunggu Approval'
+                          : 'Selesai'}
                       </span>
                     </td>
                     <td className="p-4 text-right font-black text-[#3B2A1F] dark:text-[#D4A373] text-sm">
@@ -297,76 +376,257 @@ export const TransactionsPage: React.FC = () => {
                         >
                           <Printer className="w-4 h-4" />
                         </button>
-                        {isOwner && !isRefunded && (
+                        {!isOwner && isApprovedNotDisbursed ? (
+                          <button
+                            onClick={() => {
+                              if (!isShiftActive) {
+                                showToast('Shift kasir aktif diperlukan untuk mencatat penyerahan uang refund.', 'error');
+                                return;
+                              }
+                              setDisbursingData({ order: ord, request: refundReq });
+                            }}
+                            disabled={!isShiftActive}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 min-h-[44px] cursor-pointer ${
+                              isShiftActive
+                                ? 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white shadow-sm hover:shadow active:scale-95'
+                                : 'bg-stone-200 dark:bg-stone-800 text-stone-400 dark:text-stone-500 cursor-not-allowed opacity-70'
+                            }`}
+                            title={
+                              !isShiftActive
+                                ? 'Buka shift kasir terlebih dahulu untuk mencairkan refund'
+                                : 'Serahkan uang refund ke pelanggan (Disetujui Owner)'
+                            }
+                          >
+                            <DollarSign className="w-4 h-4 text-white" />
+                            <span>Serahkan Uang</span>
+                          </button>
+                        ) : isPendingApproval ? (
+                          <button
+                            disabled
+                            className="p-2 rounded-xl bg-amber-500/10 text-amber-600 cursor-not-allowed opacity-80 min-h-[44px] min-w-[44px] flex items-center justify-center"
+                            title="Pengajuan refund sedang menunggu persetujuan Owner"
+                          >
+                            <Clock className="w-4 h-4" />
+                          </button>
+                        ) : !isRefunded ? (
                           <button
                             onClick={() => setRefundingOrder(ord)}
-                            className="p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer"
-                            title="Refund Transaksi"
+                            className="p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+                            title="Ajukan Refund Transaksi"
                           >
                             <RotateCcw className="w-4 h-4" />
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </td>
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>
+
+        {/* Mobile Touch Cards */}
+        <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800/60">
+          {displayOrders.length === 0 ? (
+            <div className="p-8 text-center text-stone-400 font-semibold text-xs">
+              Tidak ada transaksi ditemukan.
+            </div>
+          ) : (
+            displayOrders.map(ord => {
+              const isRefunded = ord.payment?.status === 'refunded';
+              const refundReq = refundRequestsMap[String(ord.id)];
+              const isApprovedNotDisbursed = refundReq?.approval_status === 'approved' && refundReq?.disbursement_status === 'not_disbursed';
+              const isPendingApproval = refundReq?.approval_status === 'pending' || (!refundReq && ord.refund_pending);
+              const fin = isOwner ? getOrderFinancials(ord, products, recipes, stocks) : null;
+
+              return (
+                <div
+                  key={`mobile-order-${ord.id}`}
+                  onClick={() => openReceiptModal(ord)}
+                  className="p-4 space-y-3 hover:bg-stone-50/50 dark:hover:bg-[#25221F] transition-colors cursor-pointer"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="font-black text-stone-900 dark:text-stone-100 text-sm">
+                        {ord.order_number}
+                      </span>
+                      <p className="text-[11px] text-stone-400 font-medium">
+                        {formatDate(ord.created_at)} • Kasir: <span className="font-semibold text-stone-700 dark:text-stone-300">{ord.created_by_name}</span>
+                      </p>
+                    </div>
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase shrink-0 ${
+                      isRefunded
+                        ? 'bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800'
+                        : isApprovedNotDisbursed
+                        ? 'bg-blue-100 dark:bg-blue-950/50 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800'
+                        : isPendingApproval
+                        ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800'
+                        : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
+                    }`}>
+                      {isRefunded
+                        ? 'Refunded'
+                        : isApprovedNotDisbursed
+                        ? 'Disetujui Owner'
+                        : isPendingApproval
+                        ? 'Menunggu Approval'
+                        : 'Selesai'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-stone-800 dark:text-stone-200">
+                        {ord.customer_name || 'Pelanggan Walk-in'}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-lg text-[10px] bg-amber-50 dark:bg-amber-950/30 text-[#C68B59] font-bold border border-amber-200/50 dark:border-amber-800/50 uppercase">
+                        {ord.order_type === 'dine_in' ? 'Dine In' : 'Take Away'}
+                      </span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold uppercase bg-stone-100 dark:bg-stone-800 text-stone-800 dark:text-stone-200 border border-stone-200 dark:border-stone-700">
+                      {ord.payment?.method || '-'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <div>
+                      <p className="text-[10px] text-stone-400 font-bold uppercase tracking-wider">Total Transaksi</p>
+                      <p className="font-black text-[#3B2A1F] dark:text-[#D4A373] text-sm">
+                        {formatRupiah(ord.total_amount)}
+                      </p>
+                    </div>
+                    {isOwner && fin && (
+                      <div
+                        className="text-right"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedAuditOrder(ord);
+                        }}
+                      >
+                        <p className="text-[10px] text-stone-400 font-bold uppercase tracking-wider">HPP / Margin</p>
+                        <p className="text-xs font-black text-stone-800 dark:text-stone-200">
+                          {formatRupiah(fin.hpp)}{' '}
+                          <span className={`text-[11px] ${fin.grossProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                            ({fin.omzet > 0 ? `${fin.marginPercent}%` : '0%'})
+                          </span>
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-stone-100 dark:border-stone-800/60 flex items-center justify-end gap-2" onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => openReceiptModal(ord)}
+                      className="min-h-[44px] px-3 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 text-stone-700 dark:text-stone-300 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      title="Cetak Struk"
+                      aria-label={`Cetak struk ${ord.order_number}`}
+                    >
+                      <Printer className="w-4 h-4 text-[#C68B59]" />
+                      Struk
+                    </button>
+                    {isOwner && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAuditOrder(ord)}
+                        className="min-h-[44px] px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-400 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Audit HPP & Margin"
+                        aria-label={`Audit HPP order ${ord.order_number}`}
+                      >
+                        <TrendingUp className="w-4 h-4" />
+                        Audit HPP
+                      </button>
+                    )}
+                    {!isOwner && isApprovedNotDisbursed ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!isShiftActive) {
+                            showToast('Shift kasir aktif diperlukan untuk mencatat penyerahan uang refund.', 'error');
+                            return;
+                          }
+                          setDisbursingData({ order: ord, request: refundReq });
+                        }}
+                        disabled={!isShiftActive}
+                        className={`min-h-[44px] px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                          isShiftActive
+                            ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                            : 'bg-stone-200 dark:bg-stone-800 text-stone-400 cursor-not-allowed opacity-70'
+                        }`}
+                        title="Serahkan uang refund ke pelanggan"
+                      >
+                        <DollarSign className="w-4 h-4 text-white" />
+                        Serahkan Uang
+                      </button>
+                    ) : isPendingApproval ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="min-h-[44px] px-3 rounded-xl bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 font-bold text-xs cursor-not-allowed opacity-80 flex items-center justify-center gap-1.5"
+                        title="Menunggu approval"
+                      >
+                        <Clock className="w-4 h-4" />
+                        Menunggu
+                      </button>
+                    ) : !isRefunded ? (
+                      <button
+                        type="button"
+                        onClick={() => setRefundingOrder(ord)}
+                        className="min-h-[44px] px-3 rounded-xl bg-rose-50 dark:bg-rose-950/20 hover:bg-rose-100 text-rose-600 dark:text-rose-400 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Ajukan Refund"
+                        aria-label={`Ajukan refund ${ord.order_number}`}
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        Refund
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
-      {/* Confirmation Dialog for Refund */}
-      <ConfirmDialog
+      {/* Modal Pengajuan Refund (Kasir & Owner) */}
+      <RefundRequestModal
         isOpen={!!refundingOrder}
-        title="Konfirmasi Refund Transaksi"
-        message={`Apakah Anda yakin ingin merefund transaksi ${refundingOrder?.order_number}? Pembayaran akan ditandai sebagai refunded dan bahan baku yang sudah digunakan TIDAK akan dikembalikan ke stok.`}
-        confirmText="Ya, Refund Transaksi"
-        cancelText="Batal"
-        isDanger={true}
-        isLoading={isRefunding}
-        onConfirm={handleConfirmRefund}
-        onCancel={() => {
-          if (!isRefunding) setRefundingOrder(null);
+        order={refundingOrder}
+        currentUser={currentUser as any}
+        onClose={() => setRefundingOrder(null)}
+        onSuccess={() => {
+          refreshData?.();
+          updatePendingCount();
         }}
-      >
-        <div className="text-left pt-1 space-y-3">
-          <div>
-            <label className="block text-[11px] font-bold text-stone-600 dark:text-stone-300 mb-1">
-              Metode Pengembalian Dana:
-            </label>
-            <select
-              value={refundMethod}
-              onChange={e => setRefundMethod(e.target.value as PaymentMethod)}
-              className="w-full px-3 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-200 dark:border-stone-700 text-xs font-semibold focus:outline-none"
-            >
-              <option value="cash">Tunai (Uang Laci Kasir)</option>
-              <option value="qris">QRIS / Transfer Non-Tunai</option>
-            </select>
-            <p className="text-[10px] text-stone-400 mt-1">
-              {refundMethod === 'cash'
-                ? 'Uang tunai dikeluarkan dari laci kasir shift aktif saat ini.'
-                : 'Pengembalian non-tunai tidak memotong fisik uang kas laci kasir.'}
-            </p>
-          </div>
+        showToast={showToast}
+      />
 
-          <div>
-            <label className="block text-[11px] font-bold text-stone-600 dark:text-stone-300 mb-1">
-              Alasan Refund:
-            </label>
-            <select
-              value={refundReason}
-              onChange={e => setRefundReason(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-200 dark:border-stone-700 text-xs font-semibold focus:outline-none"
-            >
-              <option value="Batal Pelanggan">Batal Pelanggan</option>
-              <option value="Salah Buat">Salah Buat</option>
-              <option value="Komplain Rasa">Komplain Rasa</option>
-              <option value="Lainnya">Lainnya</option>
-            </select>
-          </div>
-        </div>
-      </ConfirmDialog>
+      {/* Modal Antrean Persetujuan Refund (Khusus Owner) */}
+      <RefundApprovalQueueModal
+        isOpen={isQueueOpen}
+        onClose={() => setIsQueueOpen(false)}
+        onSuccess={() => {
+          refreshData?.();
+          updatePendingCount();
+        }}
+        showToast={showToast}
+      />
+
+      {/* Modal Penyerahan Uang Refund Kasir */}
+      <RefundDisbursementModal
+        isOpen={!!disbursingData}
+        order={disbursingData?.order || null}
+        refundRequest={disbursingData?.request || null}
+        currentUser={currentUser as any}
+        activeShift={activeShift}
+        isShiftActive={isShiftActive}
+        onClose={() => setDisbursingData(null)}
+        onSuccess={() => {
+          refreshData?.();
+          updatePendingCount();
+        }}
+        showToast={showToast}
+      />
 
       {/* Modal Audit HPP Transaksi Khusus Owner */}
       {isOwner && selectedAuditOrder && (() => {

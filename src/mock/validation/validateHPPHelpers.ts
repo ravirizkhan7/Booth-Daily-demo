@@ -601,6 +601,7 @@ recordTest('S59', 'In-memory backup payload validation mendukung RecipeIngredien
       stockHistories: [],
       purchases: [],
       expenses: [],
+      refundRequests: [],
       activeShiftId: null,
       settings: {
         store_name: 'Booth Daily Test Lab',

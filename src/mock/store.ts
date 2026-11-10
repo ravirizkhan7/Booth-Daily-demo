@@ -21,9 +21,13 @@ import {
   PaymentMethod,
   BaseUnit,
   BaselineSource,
+  RefundRequest,
+  RefundApprovalStatus,
+  RefundDisbursementStatus,
+  RefundType,
 } from '../types';
 import { MockStoreState } from './types';
-import { getOperationalDate, calculateShiftFinancials } from '../utils/shiftCalculation';
+import { getOperationalDate, calculateShiftFinancials, calculateShiftAvailableCash } from '../utils/shiftCalculation';
 import { VALID_EXPENSE_CATEGORIES } from '../utils/shiftExpenseValidation';
 import { calculateItemUnitHPP } from '../utils/reportUtils';
 import { validatePackagingConversion } from '../utils/stockUtils';
@@ -44,6 +48,7 @@ import { initialOrders } from './data/orders';
 import { initialPurchases } from './data/purchases';
 import { initialDiscountRules } from './data/discountRules';
 import { initialSettings } from './data/settings';
+import { migrateLegacyVipDiscount } from '../utils/legacyVipDiscountMigration';
 import {
   loadPersistedSnapshot,
   savePersistedSnapshot,
@@ -120,6 +125,14 @@ export interface OrderHPPMigrationReport {
   migratedCount: number;
   partialCount: number;
   specialHandlingCount: number;
+}
+
+export interface SubmitRefundRequestInput {
+  refund_type: RefundType;
+  reason: string;
+  evidence_image_url: string;
+  notes?: string;
+  refund_payment_method?: PaymentMethod;
 }
 
 export class MockStore {
@@ -570,6 +583,7 @@ export class MockStore {
       settings: deepClone(initialSettings),
       shifts: [],
       expenses: [],
+      refundRequests: [],
       activeShiftId: null,
     };
     this.normalizeStocks(seed.stocks, seed.stockHistories);
@@ -628,6 +642,10 @@ export class MockStore {
       this.lastSavedState = diskSnapshot;
 
       this.normalizeSettings(loadResult.data.settings);
+      // Migrasi satu kali konfigurasi legacy vip_discount_percentage -> discountRules (idempoten, ber-penanda).
+      // Dipersist bersama snapshot lewat jalur needsNormalizedPersist/hasPendingMigrationPersist yang sama
+      // dengan migrasi HPP, sehingga kegagalan tulis tidak meninggalkan perubahan parsial di disk.
+      const vipDiscountMigrated = migrateLegacyVipDiscount(loadResult.data);
       const stocksChanged = this.normalizeStocks(loadResult.data.stocks, loadResult.data.stockHistories);
       const ordersMigration = this.stabilizeLegacyOrderHPPSnapshots(
         loadResult.data.orders,
@@ -635,7 +653,7 @@ export class MockStore {
         loadResult.data.recipes,
         loadResult.data.stocks
       );
-      if (stocksChanged || ordersMigration.hasChanges) {
+      if (stocksChanged || ordersMigration.hasChanges || vipDiscountMigrated) {
         this.needsNormalizedPersist = true;
         this.hasPendingMigrationPersist = true;
       } else {
@@ -849,6 +867,11 @@ export class MockStore {
       this.assertActiveOwnerSession('memulihkan data cadangan');
     }
     this.state = deepClone(newState);
+    if (!bypassSessionGuard) {
+      // Backup lama (tanpa penanda migrasi) menjalankan migrasi legacy VIP secara idempoten.
+      // Jalur rollback internal (bypassSessionGuard) memulihkan state persis apa adanya.
+      migrateLegacyVipDiscount(this.state);
+    }
     this.isWriteLocked = false;
     this.hasPendingMigrationPersist = false;
     this.needsNormalizedPersist = false;
@@ -2485,7 +2508,8 @@ export class MockStore {
         qris_difference_reason: payload.qris_difference_reason,
         notes: payload.notes,
       },
-      this.getShiftExpenses(shift.id)
+      this.getShiftExpenses(shift.id),
+      this.state.refundRequests
     );
 
     // Validasi alasan selisih jika ada selisih
@@ -2664,7 +2688,8 @@ export class MockStore {
         qris_difference_reason: payload.qris_difference_reason,
         notes: shift.notes,
       },
-      this.getShiftExpenses(shift.id)
+      this.getShiftExpenses(shift.id),
+      this.state.refundRequests
     );
 
     const now = new Date();
@@ -3051,6 +3076,14 @@ export class MockStore {
     if (index === -1) {
       throw new Error(`Order with ID ${id} not found`);
     }
+
+    // HARDENING: Cegah mutasi ilegal status payment menjadi 'refunded' via updateOrder
+    if (orderData.payment?.status === 'refunded' && this.state.orders[index].payment?.status !== 'refunded') {
+      throw new Error(
+        "Aksi ditolak: Perubahan status pembayaran pesanan menjadi 'refunded' dilarang melalui updateOrder. Gunakan workflow refund resmi."
+      );
+    }
+
     const updated: Order = {
       ...this.state.orders[index],
       ...orderData,
@@ -3061,10 +3094,23 @@ export class MockStore {
     return deepClone(updated);
   }
 
+  /**
+   * @deprecated JALUR OPERASIONAL DITUTUP.
+   * Metode direct refund legacy ini dinonaktifkan pada runtime browser operasional.
+   * Seluruh pengembalian dana operasional wajib melalui alur pengajuan kasir dan persetujuan Owner via refundService.
+   * Hanya diizinkan untuk internal test runner / backward compatibility unit test.
+   */
   public refundOrder(
     id: string,
-    metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }
+    metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod; isInternalTest?: boolean }
   ): Order {
+    // HARDENING: Blokir direct refund pada runtime browser operasional
+    if (typeof window !== 'undefined' && !metadata?.isInternalTest) {
+      throw new Error(
+        'Aksi ditolak: Direct refund legacy dinonaktifkan pada lingkungan operasional browser. Seluruh pengembalian dana wajib menggunakan workflow resmi (submitRefundRequest -> approveRefundRequest -> disburseRefund).'
+      );
+    }
+
     this.ensureMigrationPersisted();
     const index = this.state.orders.findIndex(o => String(o.id) === String(id));
     if (index === -1) {
@@ -3117,6 +3163,456 @@ export class MockStore {
 
     this.persist();
     return deepClone(order);
+  }
+
+  // ----------------------------------------------------
+  // REFUND WORKFLOW METHODS (Approval, PIN Binding & Emergency)
+  // ----------------------------------------------------
+  private markStockHistoriesAsRefunded(orderNumber: string, refundedByName?: string): void {
+    if (orderNumber && Array.isArray(this.state.stockHistories)) {
+      this.state.stockHistories.forEach(h => {
+        if (h.reference && h.reference.includes(orderNumber)) {
+          h.type = 'refund';
+          if (h.reference.startsWith('Penjualan #')) {
+            h.reference = h.reference.replace('Penjualan #', 'Refund Penjualan #');
+          } else if (!h.reference.startsWith('Refund Penjualan')) {
+            h.reference = `Refund Penjualan #${orderNumber}`;
+          }
+          if (refundedByName) {
+            h.user_name = refundedByName;
+          }
+        }
+      });
+    }
+  }
+
+  public getRefundRequests(params?: {
+    order_id?: string;
+    shift_id?: string;
+    approval_status?: RefundApprovalStatus;
+  }): RefundRequest[] {
+    let list = Array.isArray(this.state.refundRequests) ? this.state.refundRequests : [];
+    if (params?.order_id) {
+      list = list.filter(r => String(r.order_id) === String(params.order_id));
+    }
+    if (params?.shift_id) {
+      list = list.filter(r => r.requested_shift_id === params.shift_id || r.disbursed_shift_id === params.shift_id);
+    }
+    if (params?.approval_status) {
+      list = list.filter(r => r.approval_status === params.approval_status);
+    }
+    return deepClone(list).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }
+
+  public getRefundRequestById(id: string): RefundRequest | undefined {
+    const list = Array.isArray(this.state.refundRequests) ? this.state.refundRequests : [];
+    const req = list.find(r => String(r.id) === String(id));
+    return req ? deepClone(req) : undefined;
+  }
+
+  public getRefundRequestByOrderId(orderId: string): RefundRequest | undefined {
+    const list = Array.isArray(this.state.refundRequests) ? this.state.refundRequests : [];
+    const req = list.find(r => String(r.order_id) === String(orderId));
+    return req ? deepClone(req) : undefined;
+  }
+
+  public getShiftAvailableCash(shiftId?: string): number {
+    const targetShiftId = shiftId || this.state.activeShiftId;
+    if (!targetShiftId) return 0;
+    const shift = (this.state.shifts || []).find(s => String(s.id) === String(targetShiftId));
+    if (!shift) return 0;
+    return calculateShiftAvailableCash(
+      shift,
+      this.state.orders || [],
+      this.getShiftExpenses(shift.id),
+      this.state.refundRequests || []
+    );
+  }
+
+  public submitRefundRequest(
+    orderId: string,
+    payload: {
+      refund_type: RefundType;
+      reason: string;
+      evidence_image_url: string;
+      notes?: string;
+      refund_payment_method?: PaymentMethod;
+    },
+    pin: string
+  ): RefundRequest {
+    this.ensureMigrationPersisted();
+    const memorySnapshot = deepClone(this.state);
+    try {
+      // 1. Validasi sesi aktif
+      const session = sessionManager.getSession();
+      if (!session?.userId) {
+        throw new Error('Aksi ditolak: Pengguna wajib login untuk mengajukan refund.');
+      }
+      const sessionUser = (this.state.users || []).find(
+        u => String(u.id) === String(session.userId) && u.is_active
+      );
+      if (!sessionUser) {
+        throw new Error('Aksi ditolak: Pengguna sesi tidak ditemukan atau akun dinonaktifkan.');
+      }
+
+      // 2. Validasi PIN pengaju mengikat sesi aktif
+      const cleanPin = (pin || '').trim();
+      if (!/^\d{4}$/.test(cleanPin)) {
+        throw new Error('PIN harus berupa 4 digit angka numerik.');
+      }
+      if (!sessionUser.pin || sessionUser.pin.trim() !== cleanPin) {
+        throw new Error(`Autentikasi gagal: PIN yang dimasukkan tidak cocok dengan sesi aktif (${sessionUser.name}).`);
+      }
+
+      // 3. Validasi shift aktif
+      if (!this.state.activeShiftId) {
+        throw new Error('Shift kasir aktif diperlukan untuk memproses pengajuan refund.');
+      }
+      const activeShift = (this.state.shifts || []).find(
+        s => String(s.id) === String(this.state.activeShiftId) && s.status === 'open'
+      );
+      if (!activeShift) {
+        throw new Error('Tidak ada shift kasir yang sedang aktif / terbuka.');
+      }
+
+      // 4. Validasi order
+      const orderIndex = this.state.orders.findIndex(o => String(o.id) === String(orderId));
+      if (orderIndex === -1) {
+        throw new Error(`Pesanan dengan ID ${orderId} tidak ditemukan.`);
+      }
+      const order = this.state.orders[orderIndex];
+      if (order.payment?.status === 'refunded') {
+        throw new Error('Pesanan sudah pernah direfund sebelumnya.');
+      }
+
+      // Cegah pengajuan ganda jika ada pengajuan pending
+      const requests = Array.isArray(this.state.refundRequests) ? this.state.refundRequests : [];
+      if (requests.some(r => String(r.order_id) === String(orderId) && r.approval_status === 'pending')) {
+        throw new Error('Transaksi ini sedang dalam antrean persetujuan refund.');
+      }
+
+      // 5. Validasi alasan dan foto bukti
+      const cleanReason = (payload.reason || '').trim();
+      if (!cleanReason) {
+        throw new Error('Alasan refund wajib diisi.');
+      }
+      const photo = (payload.evidence_image_url || '').trim();
+      if (!photo || !photo.startsWith('data:image/')) {
+        throw new Error('Bukti foto wajib dilampirkan dalam format gambar (data URL) yang sah.');
+      }
+
+      // 6. Penentuan metode dan emergency disbursement
+      const origMethod = order.payment?.method || 'cash';
+      let targetRefundMethod = payload.refund_payment_method || origMethod;
+
+      let disbursementStatus: RefundDisbursementStatus = 'not_disbursed';
+      let disbursedShiftId: string | undefined = undefined;
+      let disbursedAt: string | undefined = undefined;
+      let disbursedByUserId: string | undefined = undefined;
+      let disbursedByName: string | undefined = undefined;
+
+      if (payload.refund_type === 'normal') {
+        // Kebijakan A.6: Refund normal wajib menggunakan metode pembayaran awal
+        targetRefundMethod = origMethod;
+        disbursementStatus = 'not_disbursed';
+      } else if (payload.refund_type === 'emergency') {
+        // Kebijakan A.7: Emergency QRIS -> tunai diperbolehkan
+        targetRefundMethod = 'cash';
+        // Validasi ketersediaan saldo kas laci secara atomik
+        const availableCash = calculateShiftAvailableCash(
+          activeShift,
+          this.state.orders,
+          this.getShiftExpenses(activeShift.id),
+          requests
+        );
+        const refundAmount = Number(order.total_amount) || 0;
+        if (refundAmount > availableCash) {
+          throw new Error(
+            `Saldo kas fisik di laci tidak mencukupi (Tersedia: Rp ${availableCash.toLocaleString('id-ID')}, Dibutuhkan: Rp ${refundAmount.toLocaleString('id-ID')}). Penyerahan tunai darurat dibatalkan demi keamanan kas.`
+          );
+        }
+
+        disbursementStatus = 'disbursed';
+        disbursedShiftId = activeShift.id;
+        disbursedAt = new Date().toISOString();
+        disbursedByUserId = sessionUser.id;
+        disbursedByName = sessionUser.name;
+      } else {
+        throw new Error(`Tipe refund tidak valid: ${payload.refund_type}`);
+      }
+
+      const now = new Date().toISOString();
+      const newRequest: RefundRequest = {
+        id: `rr-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        order_id: String(order.id),
+        order_number: order.order_number,
+        refund_type: payload.refund_type,
+        original_payment_method: origMethod,
+        refund_payment_method: targetRefundMethod,
+        amount: Number(order.total_amount) || 0,
+        approval_status: 'pending',
+        disbursement_status: disbursementStatus,
+        disbursed_at: disbursedAt,
+        disbursed_by_user_id: disbursedByUserId,
+        disbursed_by_name: disbursedByName,
+        disbursed_shift_id: disbursedShiftId,
+        reason: cleanReason,
+        notes: payload.notes?.trim() || undefined,
+        evidence_image_url: photo,
+        requested_by_user_id: sessionUser.id,
+        requested_by_name: sessionUser.name,
+        requested_shift_id: activeShift.id,
+        created_at: now,
+        updated_at: now,
+      };
+
+      if (!Array.isArray(this.state.refundRequests)) {
+        this.state.refundRequests = [];
+      }
+      this.state.refundRequests.push(newRequest);
+
+      // Tandai order memiliki pengajuan aktif (belum difinalisasi sebagai refunded)
+      order.refund_pending = true;
+      order.refund_request_id = newRequest.id;
+
+      this.persist();
+      return deepClone(newRequest);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
+  }
+
+  public approveRefundRequest(requestId: string, pin: string, notes?: string): RefundRequest {
+    this.ensureMigrationPersisted();
+    const memorySnapshot = deepClone(this.state);
+    try {
+      // 1. Otorisasi Owner aktif
+      const owner = this.assertActiveOwnerSession('menyetujui pengajuan refund');
+
+      // 2. Verifikasi PIN Owner
+      const cleanPin = (pin || '').trim();
+      if (!/^\d{4}$/.test(cleanPin)) {
+        throw new Error('PIN Owner harus berupa 4 digit angka numerik.');
+      }
+      if (!owner.pin || owner.pin.trim() !== cleanPin) {
+        throw new Error('Autentikasi gagal: PIN Owner tidak valid.');
+      }
+
+      // 3. Validasi keberadaan request
+      const reqIndex = (this.state.refundRequests || []).findIndex(r => String(r.id) === String(requestId));
+      if (reqIndex === -1) {
+        throw new Error(`Pengajuan refund dengan ID ${requestId} tidak ditemukan.`);
+      }
+      const request = this.state.refundRequests[reqIndex];
+      if (request.approval_status !== 'pending') {
+        throw new Error(`Pengajuan refund sudah diputuskan sebelumnya (${request.approval_status}).`);
+      }
+
+      const orderIndex = this.state.orders.findIndex(o => String(o.id) === String(request.order_id));
+      if (orderIndex === -1) {
+        throw new Error(`Pesanan terkait dengan ID ${request.order_id} tidak ditemukan.`);
+      }
+      const order = this.state.orders[orderIndex];
+
+      const now = new Date().toISOString();
+      request.approval_status = 'approved';
+      request.approved_by_user_id = owner.id;
+      request.approved_by_name = owner.name;
+      request.approved_at = now;
+      if (notes) {
+        request.notes = notes.trim();
+      }
+      request.updated_at = now;
+
+      // 4. Kebijakan B.2: Order HANYA difinalisasi refunded jika uang sudah diserahkan (disbursed)
+      if (request.disbursement_status === 'disbursed') {
+        if (order.payment) {
+          order.payment.status = 'refunded';
+        }
+        order.refunded_at = now;
+        order.refunded_by_name = owner.name;
+        order.refund_reason = request.reason;
+        order.refund_method = request.refund_payment_method;
+        order.refund_shift_id = request.disbursed_shift_id || this.state.activeShiftId || order.shift_id;
+        order.refund_pending = false;
+
+        this.markStockHistoriesAsRefunded(order.order_number, owner.name);
+      } else {
+        // Approved + not_disbursed: Menunggu penyerahan uang
+        order.refund_pending = true;
+      }
+
+      this.persist();
+      return deepClone(request);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
+  }
+
+  public disburseRefund(requestId: string, pin: string): RefundRequest {
+    this.ensureMigrationPersisted();
+    const memorySnapshot = deepClone(this.state);
+    try {
+      const session = sessionManager.getSession();
+      if (!session?.userId) {
+        throw new Error('Aksi ditolak: Sesi login diperlukan untuk melakukan penyerahan uang refund.');
+      }
+      const sessionUser = (this.state.users || []).find(
+        u => String(u.id) === String(session.userId) && u.is_active
+      );
+      if (!sessionUser) {
+        throw new Error('Pengguna sesi tidak valid.');
+      }
+      if (sessionUser.role === 'owner') {
+        throw new Error('Aksi ditolak: Pemilik (Owner) tidak memiliki wewenang untuk mencairkan kas fisik refund normal. Hanya kasir bertugas yang berwenang.');
+      }
+
+      // Validasi PIN kasir / pengguna aktif yang bertugas
+      const cleanPin = (pin || '').trim();
+      if (!cleanPin) {
+        throw new Error('PIN kasir wajib diisi untuk melakukan pencairan refund.');
+      }
+      if (!/^\d{4}$/.test(cleanPin)) {
+        throw new Error('PIN kasir harus berupa 4 digit angka numerik.');
+      }
+      if (!sessionUser.pin || sessionUser.pin.trim() !== cleanPin) {
+        throw new Error('Autentikasi gagal: PIN kasir tidak valid.');
+      }
+
+      if (!this.state.activeShiftId) {
+        throw new Error('Shift kasir aktif diperlukan untuk mencatat pengeluaran uang laci.');
+      }
+      const activeShift = (this.state.shifts || []).find(
+        s => String(s.id) === String(this.state.activeShiftId) && s.status === 'open'
+      );
+      if (!activeShift) {
+        throw new Error('Tidak ada shift kasir yang sedang aktif.');
+      }
+
+      const reqIndex = (this.state.refundRequests || []).findIndex(r => String(r.id) === String(requestId));
+      if (reqIndex === -1) {
+        throw new Error(`Pengajuan refund dengan ID ${requestId} tidak ditemukan.`);
+      }
+      const request = this.state.refundRequests[reqIndex];
+
+      if (request.approval_status !== 'approved') {
+        throw new Error('Penyerahan uang hanya dapat dilakukan untuk pengajuan yang telah disetujui Owner.');
+      }
+      if (request.disbursement_status === 'disbursed') {
+        throw new Error('Dana refund sudah diserahkan sebelumnya.');
+      }
+
+      const orderIndex = this.state.orders.findIndex(o => String(o.id) === String(request.order_id));
+      if (orderIndex === -1) {
+        throw new Error('Pesanan terkait tidak ditemukan.');
+      }
+      const order = this.state.orders[orderIndex];
+
+      // Jika penyerahan tunai, validasi kecukupan kas laci
+      if (request.refund_payment_method === 'cash') {
+        const availableCash = calculateShiftAvailableCash(
+          activeShift,
+          this.state.orders,
+          this.getShiftExpenses(activeShift.id),
+          this.state.refundRequests
+        );
+        if (request.amount > availableCash) {
+          throw new Error(
+            `Saldo kas fisik di laci tidak mencukupi (Tersedia: Rp ${availableCash.toLocaleString('id-ID')}, Dibutuhkan: Rp ${request.amount.toLocaleString('id-ID')}). Penyerahan tunai dibatalkan.`
+          );
+        }
+      }
+
+      const now = new Date().toISOString();
+      request.disbursement_status = 'disbursed';
+      request.disbursed_shift_id = activeShift.id;
+      request.disbursed_at = now;
+      request.disbursed_by_user_id = sessionUser.id;
+      request.disbursed_by_name = sessionUser.name;
+      request.updated_at = now;
+
+      // Finalisasi transaksi menjadi refunded setelah dana benar-benar keluar/diserahkan
+      if (order.payment) {
+        order.payment.status = 'refunded';
+      }
+      order.refunded_at = now;
+      order.refunded_by_name = request.approved_by_name || sessionUser.name;
+      order.refund_reason = request.reason;
+      order.refund_method = request.refund_payment_method;
+      order.refund_shift_id = activeShift.id;
+      order.refund_pending = false;
+
+      this.markStockHistoriesAsRefunded(order.order_number, sessionUser.name);
+
+      this.persist();
+      return deepClone(request);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
+  }
+
+  public rejectRefundRequest(requestId: string, pin: string, rejectionReason: string): RefundRequest {
+    this.ensureMigrationPersisted();
+    const memorySnapshot = deepClone(this.state);
+    try {
+      // 1. Otorisasi Owner aktif
+      const owner = this.assertActiveOwnerSession('menolak pengajuan refund');
+
+      // 2. Verifikasi PIN Owner
+      const cleanPin = (pin || '').trim();
+      if (!/^\d{4}$/.test(cleanPin)) {
+        throw new Error('PIN Owner harus berupa 4 digit angka numerik.');
+      }
+      if (!owner.pin || owner.pin.trim() !== cleanPin) {
+        throw new Error('Autentikasi gagal: PIN Owner tidak valid.');
+      }
+
+      // 3. Validasi alasan penolakan
+      const cleanRejection = (rejectionReason || '').trim();
+      if (!cleanRejection) {
+        throw new Error('Alasan penolakan pengajuan refund wajib diisi.');
+      }
+
+      const reqIndex = (this.state.refundRequests || []).findIndex(r => String(r.id) === String(requestId));
+      if (reqIndex === -1) {
+        throw new Error(`Pengajuan refund dengan ID ${requestId} tidak ditemukan.`);
+      }
+      const request = this.state.refundRequests[reqIndex];
+      if (request.approval_status !== 'pending') {
+        throw new Error(`Pengajuan refund sudah diputuskan sebelumnya (${request.approval_status}).`);
+      }
+
+      const orderIndex = this.state.orders.findIndex(o => String(o.id) === String(request.order_id));
+      if (orderIndex === -1) {
+        throw new Error('Pesanan terkait tidak ditemukan.');
+      }
+      const order = this.state.orders[orderIndex];
+
+      const now = new Date().toISOString();
+      request.approval_status = 'rejected';
+      request.approved_by_user_id = owner.id;
+      request.approved_by_name = owner.name;
+      request.rejection_reason = cleanRejection;
+      request.updated_at = now;
+
+      // Kebijakan B.1 & B.2:
+      // Order tetap completed (penjualan tidak dibatalkan).
+      // Flag pending dihilangkan.
+      order.refund_pending = false;
+
+      // Jika emergency yang sudah diserahkan ditolak:
+      // Uang fisik yang keluar tetap tercatat pada disbursement_status = 'disbursed'
+      // untuk kebutuhan audit investigasi & rekonsiliasi, tanpa membuat utang/potongan gaji otomatis.
+
+      this.persist();
+      return deepClone(request);
+    } catch (err) {
+      this.state = memorySnapshot;
+      throw err;
+    }
   }
 
   // ----------------------------------------------------
@@ -3566,6 +4062,10 @@ export class MockStore {
     minimum_purchase: number;
     discount_percentage: number;
     is_active?: boolean;
+    scope?: 'general' | 'vip';
+    validity_type?: 'unlimited' | 'time_limited';
+    start_date?: string | null;
+    end_date?: string | null;
   }): DiscountRule {
     this.assertActiveOwnerSession('mengelola promo diskon');
     this.ensureMigrationPersisted();
@@ -3577,6 +4077,10 @@ export class MockStore {
         minimum_purchase: Number(payload.minimum_purchase) || 0,
         discount_percentage: Number(payload.discount_percentage) || 0,
         is_active: payload.is_active ?? true,
+        scope: payload.scope === 'vip' ? 'vip' : 'general',
+        validity_type: payload.validity_type || 'unlimited',
+        start_date: payload.validity_type === 'time_limited' ? (payload.start_date || null) : null,
+        end_date: payload.validity_type === 'time_limited' ? (payload.end_date || null) : null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -3606,6 +4110,10 @@ export class MockStore {
       const updated: DiscountRule = {
         ...this.state.discountRules[index],
         ...payload,
+        scope: payload.scope !== undefined ? payload.scope : (this.state.discountRules[index].scope || 'general'),
+        validity_type: payload.validity_type !== undefined ? payload.validity_type : (this.state.discountRules[index].validity_type || 'unlimited'),
+        start_date: payload.start_date !== undefined ? payload.start_date : (this.state.discountRules[index].start_date || null),
+        end_date: payload.end_date !== undefined ? payload.end_date : (this.state.discountRules[index].end_date || null),
         id: this.state.discountRules[index].id,
         updated_at: new Date().toISOString(),
       };
@@ -3780,6 +4288,8 @@ export class MockStore {
         report_signer_name: cleanSigner,
         report_city: cleanCity,
         vip_discount_percentage: cleanVipDiscount,
+        // Penanda migrasi hanya dikelola internal; tidak boleh diubah/di-reset lewat updateSettings.
+        vip_discount_legacy_migrated: this.state.settings.vip_discount_legacy_migrated,
         vip_tax_percentage: cleanVipTax,
         vip_room_service_charge_percentage: cleanVipService,
       };

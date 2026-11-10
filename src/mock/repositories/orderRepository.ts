@@ -26,7 +26,14 @@ export const orderRepository = {
     return mockStore.addOrder(orderData);
   },
 
-  async refundOrder(id: string, metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }): Promise<Order> {
+  /**
+   * @deprecated JALUR OPERASIONAL DITUTUP.
+   * Metode direct refund legacy untuk keperluan internal unit test backward compatibility.
+   */
+  async refundOrder(
+    id: string,
+    metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod; isInternalTest?: boolean }
+  ): Promise<Order> {
     return mockStore.refundOrder(id, metadata);
   },
 };

@@ -178,19 +178,28 @@ async function runTests() {
     is_active: true,
   };
 
-  // 2.1 Regular order: no VIP discount even if vipDiscountPercentage is passed
-  const regularPreview = calculateOrderPreview(100000, [], 10, {
+  // Diskon VIP kini HANYA bersumber dari discountRules (scope 'vip'); konfigurasi legacy
+  // vip_discount_percentage tidak lagi memengaruhi kalkulasi transaksi baru.
+  const vipRuleFor = (pct: number): DiscountRule => ({
+    id: `vip-rule-${pct}`,
+    name: `Diskon Ruang VIP (${pct}%)`,
+    minimum_purchase: 0,
+    discount_percentage: pct,
+    is_active: true,
+    scope: 'vip',
+  });
+
+  // 2.1 Regular order: promo VIP tidak pernah berlaku pada order reguler
+  const regularPreview = calculateOrderPreview(100000, [vipRuleFor(10)], 10, {
     isVip: false,
-    vipDiscountPercentage: 10,
   });
   assert(regularPreview.subtotal === 100000, '2.1 Subtotal is 100,000');
   assert(regularPreview.discount === 0, '2.1 Regular order total discount is 0');
   assert(regularPreview.isVip === false, '2.1 Regular order isVip is false');
 
   // 2.2 VIP order with 10% VIP discount: discount = 10,000
-  const vipPreview = calculateOrderPreview(100000, [], 10, {
+  const vipPreview = calculateOrderPreview(100000, [vipRuleFor(10)], 10, {
     isVip: true,
-    vipDiscountPercentage: 10,
   });
   assert(vipPreview.discount === 10000, '2.2 VIP discount is 10,000 (10% of 100,000)');
   assert(vipPreview.discountPercentage === 10, '2.2 discountPercentage is 10%');
@@ -198,39 +207,34 @@ async function runTests() {
   assert(vipPreview.isVip === true, '2.2 isVip is true');
 
   // 2.3 Non-stacking: Promo larger than VIP discount (Promo 20% = 20,000 vs VIP 10% = 10,000)
-  const promoLargerPreview = calculateOrderPreview(100000, [promoRule20], 10, {
+  const promoLargerPreview = calculateOrderPreview(100000, [promoRule20, vipRuleFor(10)], 10, {
     isVip: true,
-    vipDiscountPercentage: 10,
   });
   assert(promoLargerPreview.discount === 20000, '2.3 When promo (20,000) > VIP (10,000), promo is chosen');
   assert(promoLargerPreview.discountName === 'Promo Spesial 20%', '2.3 discountName is promo name');
 
   // 2.4 Non-stacking: VIP discount larger than Promo (VIP 10% = 10,000 vs Promo 5% = 5,000)
-  const vipLargerPreview = calculateOrderPreview(100000, [promoRule5], 10, {
+  const vipLargerPreview = calculateOrderPreview(100000, [promoRule5, vipRuleFor(10)], 10, {
     isVip: true,
-    vipDiscountPercentage: 10,
   });
   assert(vipLargerPreview.discount === 10000, '2.4 When VIP (10,000) > promo (5,000), VIP is chosen');
   assert(Boolean(vipLargerPreview.discountName?.includes('Ruang VIP')), '2.4 discountName is VIP');
 
   // 2.5 Non-stacking: Tie-breaker (Promo 10% = 10,000 vs VIP 10% = 10,000) -> VIP wins
-  const tiePreview = calculateOrderPreview(100000, [promoRule10], 10, {
+  const tiePreview = calculateOrderPreview(100000, [promoRule10, vipRuleFor(10)], 10, {
     isVip: true,
-    vipDiscountPercentage: 10,
   });
   assert(tiePreview.discount === 10000, '2.5 On tie (10,000 == 10,000), total discount is 10,000');
   assert(Boolean(tiePreview.discountName?.includes('Ruang VIP')), '2.5 On tie, tie-breaker favors VIP discount');
 
   // 2.6 Edge cases: 0% and 100% VIP discount
-  const zeroDiscPreview = calculateOrderPreview(100000, [], 10, {
+  const zeroDiscPreview = calculateOrderPreview(100000, [vipRuleFor(0)], 10, {
     isVip: true,
-    vipDiscountPercentage: 0,
   });
   assert(zeroDiscPreview.discount === 0, '2.6 0% VIP discount produces 0 discount');
 
-  const fullDiscPreview = calculateOrderPreview(100000, [], 10, {
+  const fullDiscPreview = calculateOrderPreview(100000, [vipRuleFor(100)], 10, {
     isVip: true,
-    vipDiscountPercentage: 100,
   });
   assert(fullDiscPreview.discount === 100000, '2.6 100% VIP discount produces 100,000 discount (full subtotal)');
   assert(fullDiscPreview.discountedBase === 0, '2.6 100% VIP discount results in 0 discounted base');
@@ -247,9 +251,8 @@ async function runTests() {
   // General tax = 10%
   // VIP tax = 12% (overrides general tax)
   // VIP service charge = 5%
-  const preview = calculateOrderPreview(100000, [], 10, {
+  const preview = calculateOrderPreview(100000, [vipRuleFor(10)], 10, {
     isVip: true,
-    vipDiscountPercentage: 10,
     vipTaxPercentage: 12,
     vipServiceChargePercentage: 5,
   });
@@ -275,9 +278,8 @@ async function runTests() {
   assert(preview.totalAmount === expectedGrandTotal, `3.5 Grand total is exactly ${expectedGrandTotal}`);
 
   // 3.6 VIP Tax fallback to General Tax when null
-  const nullVipTaxPreview = calculateOrderPreview(100000, [], 10, {
+  const nullVipTaxPreview = calculateOrderPreview(100000, [vipRuleFor(10)], 10, {
     isVip: true,
-    vipDiscountPercentage: 10,
     vipTaxPercentage: null,
     vipServiceChargePercentage: 5,
   });
@@ -285,9 +287,8 @@ async function runTests() {
   assert(nullVipTaxPreview.tax === 9000, '3.6 Tax is 9,000 (10% of 90,000)');
 
   // 3.7 VIP Tax override with 0% (free tax in VIP)
-  const zeroVipTaxPreview = calculateOrderPreview(100000, [], 10, {
+  const zeroVipTaxPreview = calculateOrderPreview(100000, [vipRuleFor(10)], 10, {
     isVip: true,
-    vipDiscountPercentage: 10,
     vipTaxPercentage: 0,
     vipServiceChargePercentage: 5,
   });
@@ -295,9 +296,8 @@ async function runTests() {
   assert(zeroVipTaxPreview.tax === 0, '3.7 Tax is 0');
 
   // 3.8 Service charge is 0 for regular order even if VIP service charge is configured
-  const regularOrderWithVipSettings = calculateOrderPreview(100000, [], 10, {
+  const regularOrderWithVipSettings = calculateOrderPreview(100000, [vipRuleFor(10)], 10, {
     isVip: false,
-    vipDiscountPercentage: 10,
     vipTaxPercentage: 12,
     vipServiceChargePercentage: 5,
   });
@@ -347,7 +347,17 @@ async function runTests() {
   assert(regularOrder.tax_percentage === 10, '4.1 regOrder.tax_percentage is 10');
 
   // 4.2 Create VIP order with cash payment
-  // Settings: vip_discount_percentage = 10, vip_tax_percentage = 12, vip_room_service_charge_percentage = 5
+  // Diskon VIP kini bersumber dari discountRules (promo scope 'vip' 10%), bukan setting legacy.
+  // Settings: vip_tax_percentage = 12, vip_room_service_charge_percentage = 5
+  setOwnerSession();
+  mockStore.addDiscountRule({
+    name: 'Diskon Ruang VIP (10%)',
+    minimum_purchase: 0,
+    discount_percentage: 10,
+    is_active: true,
+    scope: 'vip',
+  });
+  setCashierSession();
   const vipOrder = await transactionService.processTransaction({
     order_type: 'dine_in',
     order_area: 'vip',

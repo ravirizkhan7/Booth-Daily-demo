@@ -11,6 +11,7 @@ import {
   Settings,
   Shift,
   ShiftExpense,
+  RefundRequest,
 } from '../types';
 
 export interface MockStoreState {
@@ -26,5 +27,6 @@ export interface MockStoreState {
   settings: Settings;
   shifts: Shift[];
   expenses: ShiftExpense[];
+  refundRequests: RefundRequest[];
   activeShiftId: string | null;
 }

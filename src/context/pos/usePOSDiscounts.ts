@@ -21,6 +21,10 @@ export const usePOSDiscounts = () => {
     minimum_purchase: number;
     discount_percentage: number;
     is_active?: boolean;
+    scope?: 'general' | 'vip';
+    validity_type?: 'unlimited' | 'time_limited';
+    start_date?: string | null;
+    end_date?: string | null;
   }): Promise<DiscountRule> => {
     const created = await discountService.createDiscountRule(payload);
     setDiscountRules(prev => {
@@ -40,6 +44,10 @@ export const usePOSDiscounts = () => {
       minimum_purchase?: number;
       discount_percentage?: number;
       is_active?: boolean;
+      scope?: 'general' | 'vip';
+      validity_type?: 'unlimited' | 'time_limited';
+      start_date?: string | null;
+      end_date?: string | null;
     }
   ): Promise<DiscountRule> => {
     const updated = await discountService.updateDiscountRule(id, payload);
@@ -79,6 +87,7 @@ export const usePOSDiscounts = () => {
         minimum_purchase: Number(payload.discount_rule.minimum_purchase || 0),
         discount_percentage: Number(payload.discount_rule.discount_percentage || 0),
         is_active: Boolean(payload.discount_rule.is_active),
+        scope: payload.discount_rule.scope === 'vip' ? 'vip' : 'general',
       };
 
       setDiscountRules(prev => {

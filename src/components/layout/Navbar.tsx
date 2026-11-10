@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, Edit3, Lock, LogIn, LogOut, Menu, X, ChevronDown, Sparkles, DoorOpen, Clock, ShieldAlert } from 'lucide-react';
+import { User, Edit3, Lock, LogIn, LogOut, Menu, X, ChevronDown, Sparkles, DoorOpen, ShieldAlert } from 'lucide-react';
 import { usePOS } from '../../hooks/usePOS';
 import { BrandLogo } from '../common/BrandLogo';
 

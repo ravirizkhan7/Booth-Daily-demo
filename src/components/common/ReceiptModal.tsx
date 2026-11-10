@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { usePOS } from '../../hooks/usePOS';
 import { formatRupiah, formatDate } from '../../utils/formatters';
 import { X, Printer, Share2, CheckCircle2, RotateCcw } from 'lucide-react';
@@ -18,9 +18,61 @@ export const ReceiptModal: React.FC = () => {
   const tax            = currentReceiptOrder.tax            ?? 0;
   const serviceCharge  = currentReceiptOrder.service_charge ?? 0;
   const totalAmount    = currentReceiptOrder.total_amount   ?? 0;
-  const isVip          = currentReceiptOrder.is_vip || currentReceiptOrder.order_area === 'vip';
+  const isDineIn       = currentReceiptOrder.order_type === 'dine_in';
+  const isVip          = isDineIn && Boolean(currentReceiptOrder.is_vip || currentReceiptOrder.order_area === 'vip');
 
   const storeName = settings?.store_name?.trim() ? settings.store_name.trim() : 'BOOTH DAILY';
+
+  // F-08 Focus Management & Escape Refs
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  // F-08 Focus Trap & SAFE_TO_CLOSE Escape Handling
+  useEffect(() => {
+    if (!isReceiptModalOpen) return;
+    triggerRef.current = document.activeElement as HTMLElement | null;
+
+    const timer = setTimeout(() => {
+      // Focus on the primary action button ("Selesai & Kembali ke Kasir" or "Cetak Struk")
+      const printBtn = modalRef.current?.querySelector<HTMLButtonElement>('button.bg-amber-600');
+      printBtn?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeReceiptModal();
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (triggerRef.current && typeof triggerRef.current.focus === 'function') {
+        triggerRef.current.focus();
+      }
+    };
+  }, [isReceiptModalOpen, closeReceiptModal]);
 
   const handlePrint = () => {
     printReceipt(currentReceiptOrder, settings, printerLogo);
@@ -29,7 +81,7 @@ export const ReceiptModal: React.FC = () => {
 
   const handleCopyText = () => {
     const promoLine = discountName ? `Promo     : ${discountName}\n` : '';
-    const areaLine = isVip ? `Area      : RUANG VIP\n` : `Area      : UMUM\n`;
+    const areaLine = isDineIn ? (isVip ? `Area      : RUANG VIP\n` : `Area      : UMUM\n`) : '';
     const serviceLine = serviceCharge > 0 ? `Layanan VIP: ${formatRupiah(serviceCharge)}\n` : '';
     const discountLine = discount > 0
       ? `-${formatRupiah(discount)}`
@@ -66,29 +118,37 @@ ${settings.receipt_footer}
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-      <div className="relative w-full max-w-md bg-[#F7F5F2] dark:bg-[#1A1816] rounded-3xl shadow-2xl border border-stone-300 dark:border-stone-800 overflow-hidden flex flex-col max-h-[95vh]">
+      <div 
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="receipt-modal-title"
+        className="relative w-full max-w-md bg-[#F7F5F2] dark:bg-[#1A1816] rounded-3xl shadow-2xl border border-stone-300 dark:border-stone-800 overflow-hidden flex flex-col max-h-[95vh]"
+      >
         {/* Header */}
         <div className={`px-6 py-4 text-white flex justify-between items-center shrink-0 ${
           isRefunded ? 'bg-rose-600' : 'bg-[#10B981]'
         }`}>
           <div className="flex items-center gap-2">
             {isRefunded ? (
-              <RotateCcw className="w-6 h-6 text-white" />
+              <RotateCcw className="w-6 h-6 text-white" aria-hidden="true" />
             ) : (
-              <CheckCircle2 className="w-6 h-6 text-white" />
+              <CheckCircle2 className="w-6 h-6 text-white" aria-hidden="true" />
             )}
             <div>
-              <h3 className="font-bold text-base leading-tight">
+              <h3 id="receipt-modal-title" className="font-bold text-base leading-tight">
                 {isRefunded ? 'Transaksi Telah Direfund' : 'Transaksi Sukses!'}
               </h3>
               <p className="text-xs text-white/80">{currentReceiptOrder.order_number}</p>
             </div>
           </div>
           <button
+            type="button"
             onClick={closeReceiptModal}
-            className="p-1.5 rounded-full hover:bg-white/20 transition-colors cursor-pointer"
+            className="min-w-[44px] min-h-[44px] p-2.5 rounded-full hover:bg-white/20 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-white"
+            aria-label="Tutup modal struk"
           >
-            <X className="w-5 h-5 text-white" />
+            <X className="w-5 h-5 text-white" aria-hidden="true" />
           </button>
         </div>
 
@@ -138,12 +198,14 @@ ${settings.receipt_footer}
                   {currentReceiptOrder.customer_name ? ` (${currentReceiptOrder.customer_name})` : ''}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-stone-500">Area:</span>
-                <span className={`font-bold uppercase ${isVip ? 'text-amber-700 dark:text-amber-400' : 'text-stone-700'}`}>
-                  {isVip ? 'RUANG VIP' : 'AREA UMUM'}
-                </span>
-              </div>
+              {isDineIn && (
+                <div className="flex justify-between">
+                  <span className="text-stone-500">Area:</span>
+                  <span className={`font-bold uppercase ${isVip ? 'text-amber-700 dark:text-amber-400' : 'text-stone-700'}`}>
+                    {isVip ? 'RUANG VIP' : 'AREA UMUM'}
+                  </span>
+                </div>
+              )}
               {isRefunded && (
                 <div className="space-y-1 pt-1.5 border-t border-dashed border-rose-200">
                   <div className="flex justify-between text-rose-600 font-bold">

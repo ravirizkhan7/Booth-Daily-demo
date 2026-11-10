@@ -45,8 +45,13 @@ export const MobileMenu: React.FC<MobileMenuProps> = ({
         {/* Header */}
         <div className="p-5 flex justify-between items-center border-b border-stone-200 dark:border-stone-800 shrink-0">
           <BrandLogo size="sm" />
-          <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-stone-400">
-            <X className="w-5 h-5" />
+          <button
+            type="button"
+            onClick={() => setIsMobileMenuOpen(false)}
+            aria-label="Tutup menu navigasi"
+            className="p-2 text-stone-400"
+          >
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
         

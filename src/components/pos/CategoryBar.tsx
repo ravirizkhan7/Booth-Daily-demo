@@ -174,12 +174,21 @@ export const CategoryBar: React.FC = () => {
         </button>
       )}
 
-      {/* Horizontal Scrollable Categories Container */}
-      <div
-        ref={scrollContainerRef}
-        onScroll={updateScrollState}
-        className="flex-1 min-w-0 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none select-none"
-      >
+      {/* Horizontal Scrollable Categories Container with Non-Desktop Fade Indicators */}
+      <div className="relative flex-1 min-w-0">
+        {/* Left Fade Gradient for Tablet/Mobile */}
+        {isOverflowing && canScrollLeft && (
+          <div
+            aria-hidden="true"
+            className="lg:hidden absolute left-0 top-0 bottom-2 w-8 bg-gradient-to-r from-[#F7F5F2] dark:from-[#121110] to-transparent pointer-events-none z-10 transition-opacity duration-200"
+          />
+        )}
+
+        <div
+          ref={scrollContainerRef}
+          onScroll={updateScrollState}
+          className="w-full flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none select-none"
+        >
         <button
           onClick={() => setSelectedCategory('cat-all')}
           className={`flex items-center gap-2 px-5 py-2 rounded-full text-xs sm:text-sm font-medium whitespace-nowrap transition-all duration-150 shrink-0 ${selectedCategory === 'cat-all'
@@ -260,6 +269,15 @@ export const CategoryBar: React.FC = () => {
           <PackageX className="w-4 h-4" />
           <span>Habis</span>
         </button>
+      </div>
+
+        {/* Right Fade Gradient for Tablet/Mobile */}
+        {isOverflowing && canScrollRight && (
+          <div
+            aria-hidden="true"
+            className="lg:hidden absolute right-0 top-0 bottom-2 w-8 bg-gradient-to-l from-[#F7F5F2] dark:from-[#121110] to-transparent pointer-events-none z-10 transition-opacity duration-200"
+          />
+        )}
       </div>
 
       {/* Desktop Scroll Right Button */}

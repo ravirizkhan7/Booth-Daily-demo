@@ -1,4 +1,5 @@
 import { Product, Recipe, Stock } from '../types';
+import { calculateGrossAmount, convertUnitQuantity } from './hppCalculation';
 
 export interface ProductStockInfo {
   maxPortions: number;
@@ -20,7 +21,7 @@ export function getProductStockInfo(
   );
 
   // If no recipe defined or recipe ingredients list is empty -> ONGOING (Not ready for sale)
-  if (!recipe || !recipe.ingredients || recipe.ingredients.length === 0) {
+  if (!recipe || !Array.isArray(recipe.ingredients) || recipe.ingredients.length === 0) {
     return {
       maxPortions: 0,
       status: 'ONGOING',
@@ -34,6 +35,9 @@ export function getProductStockInfo(
   let minPortions = Infinity;
   let hasLowStockIngredient = false;
 
+  // Agregasikan kebutuhan bruto per satuan dasar stok untuk 1 porsi (konsisten dengan addOrder backend)
+  const requiredPerPortionMap = new Map<string, number>();
+
   for (const ing of recipe.ingredients) {
     if (!ing.stock_id) {
       return {
@@ -46,23 +50,85 @@ export function getProductStockInfo(
       };
     }
 
+    const stockId = String(ing.stock_id);
     const stockItem = stocks.find(
-      s => s.id != null && String(s.id) === String(ing.stock_id)
+      s => s.id != null && String(s.id) === stockId
     );
-    if (!stockItem || stockItem.current_amount <= 0) {
+
+    if (
+      !stockItem ||
+      !Number.isFinite(stockItem.current_amount) ||
+      stockItem.current_amount <= 0
+    ) {
       minPortions = 0;
       break;
     }
 
-    if (ing.amount > 0) {
-      const possible = Math.floor(stockItem.current_amount / ing.amount);
-      if (possible < minPortions) {
-        minPortions = possible;
-      }
+    if ((stockItem as any).conversion_status === 'unverified_legacy') {
+      minPortions = 0;
+      break;
     }
+
+    const netAmount = Number(ing.amount);
+    if (typeof netAmount !== 'number' || !Number.isFinite(netAmount) || netAmount <= 0) {
+      minPortions = 0;
+      break;
+    }
+
+    let convertedGross = 0;
+    try {
+      // 1. Hitung kuantitas bruto per porsi dengan persentase susut (waste)
+      const grossPerPortion = calculateGrossAmount(netAmount, ing.waste_percentage);
+
+      // 2. Konversikan ke satuan dasar stok inventaris
+      convertedGross = convertUnitQuantity(
+        grossPerPortion,
+        ing.unit || stockItem.unit,
+        stockItem.unit,
+        { stockName: stockItem.name }
+      );
+    } catch {
+      // Jika kalkulasi atau konversi gagal (satuan tidak kompatibel, overflow, dll),
+      // ikuti backend yang menolak transaksi -> porsi 0
+      minPortions = 0;
+      break;
+    }
+
+    if (!Number.isFinite(convertedGross) || convertedGross <= 0) {
+      minPortions = 0;
+      break;
+    }
+
+    const currentTotal = requiredPerPortionMap.get(stockId) || 0;
+    requiredPerPortionMap.set(stockId, currentTotal + convertedGross);
 
     if (stockItem.current_amount <= stockItem.min_amount) {
       hasLowStockIngredient = true;
+    }
+  }
+
+  // Hitung jumlah porsi maksimum berdasarkan saldo stok aktual untuk setiap bahan
+  if (minPortions > 0 && requiredPerPortionMap.size > 0) {
+    for (const [stockId, requiredPerPortion] of requiredPerPortionMap.entries()) {
+      const stockItem = stocks.find(s => s.id != null && String(s.id) === stockId);
+      if (
+        !stockItem ||
+        !Number.isFinite(stockItem.current_amount) ||
+        stockItem.current_amount <= 0
+      ) {
+        minPortions = 0;
+        break;
+      }
+
+      if (!Number.isFinite(requiredPerPortion) || requiredPerPortion <= 0) {
+        minPortions = 0;
+        break;
+      }
+
+      const possible = Math.floor(stockItem.current_amount / requiredPerPortion);
+      if (possible < minPortions) {
+        minPortions = Math.max(0, possible);
+      }
     }
   }
 

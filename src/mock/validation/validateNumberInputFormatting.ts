@@ -22,6 +22,11 @@ import { calculateOrderPreview } from '../../utils/orderCalculation';
 import { getOrderTotalHPP } from '../../utils/reportUtils';
 import { calculateShiftFinancials } from '../../utils/shiftCalculation';
 import { Order, Product, Recipe, Stock, Shift } from '../../types';
+import {
+  sanitizeNumericInput,
+  formatInitialValue as formatInitialValueComponent,
+  getCursorPositionFromDigitCount as getCursorPosComponent,
+} from '../../components/common/NumberInput';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -305,4 +310,162 @@ assert(
 
 console.log('\n====================================================');
 console.log('   SELURUH 12 CHECKLIST PENGUJIAN FORMATTING PASS!   ');
+console.log('====================================================');
+
+// =========================================================================
+// TASK 1 — T1-06 STRICT NEGATIVE INPUT PREVENTION SUITE
+// =========================================================================
+
+console.log('\n====================================================');
+console.log('   T1-06 — STRICT NEGATIVE INPUT PREVENTION TESTS   ');
+console.log('====================================================');
+
+// --- A. Negative Input Prevention (allowNegative=false / Default) ---
+console.log('\n--- A. Negative Input Prevention (Default POS Behavior) ---');
+
+// 1. Input currency -50000 ditolak
+const negCurr = sanitizeNumericInput('-50000', { isCurrency: true, allowNegative: false });
+assert(negCurr.isRejected === true && negCurr.isValid === false && negCurr.value === 0, 'A.1 Input currency "-50000" ditolak');
+
+// 2. Input integer -10 ditolak
+const negInt = sanitizeNumericInput('-10', { isCurrency: false, allowDecimals: false, allowNegative: false });
+assert(negInt.isRejected === true && negInt.isValid === false && negInt.value === 0, 'A.2 Input integer "-10" ditolak');
+
+// 3. Input desimal negatif ditolak ketika allowNegative=false
+const negDec = sanitizeNumericInput('-18.5', { allowDecimals: true, allowNegative: false });
+assert(negDec.isRejected === true && negDec.isValid === false && negDec.value === 0, 'A.3 Input desimal "-18.5" ditolak ketika allowNegative=false');
+
+// 4. Paste -50000 ditolak seluruhnya
+const pasteNeg1 = sanitizeNumericInput('-50000', { isCurrency: true, allowNegative: false });
+assert(pasteNeg1.isRejected === true && pasteNeg1.formatted === '', 'A.4 Paste "-50000" ditolak seluruhnya tanpa mengisi field');
+
+// 5. Paste -50.000 ditolak seluruhnya
+const pasteNeg2 = sanitizeNumericInput('-50.000', { isCurrency: true, allowNegative: false });
+assert(pasteNeg2.isRejected === true && pasteNeg2.formatted === '', 'A.5 Paste "-50.000" ditolak seluruhnya tanpa mengisi field');
+
+// 6. Tidak ada konversi diam-diam menjadi nilai positif
+assert(negCurr.value !== 50000 && pasteNeg1.value !== 50000, 'A.6 Tidak ada konversi diam-diam "-50000" menjadi nilai positif 50000');
+
+// 7. Tidak ada NaN yang diteruskan ke parent
+assert(!isNaN(negCurr.value) && !isNaN(negInt.value) && !isNaN(negDec.value), 'A.7 Nilai hasil sanitasi negatif tidak pernah NaN');
+
+// --- B. Allow Negative Compatibility (allowNegative=true) ---
+console.log('\n--- B. Allow Negative Compatibility (Explicit Flag) ---');
+
+// 8. allowNegative=true mempertahankan angka negatif
+const allowNegCurr = sanitizeNumericInput('-50000', { isCurrency: true, allowNegative: true });
+assert(allowNegCurr.isValid === true && allowNegCurr.value === -50000 && allowNegCurr.formatted === '-50.000', 'B.8 allowNegative=true mempertahankan -50000 dengan format "-50.000"');
+
+// 9. Pengeditan tanda minus tidak merusak posisi kursor
+const caretPosNeg = getCursorPosComponent('-50.000', 2, true);
+assert(caretPosNeg === 3, 'B.9 Caret tracking pada "-50.000" setelah digit "0" pertama di index 3');
+
+// 10. Input sementara seperti "-" tidak meneruskan NaN
+const tempMinus = sanitizeNumericInput('-', { isCurrency: true, allowNegative: true });
+assert(tempMinus.value === 0 && !isNaN(tempMinus.value) && tempMinus.formatted === '-', 'B.10 Input sementara "-" tidak menghasilkan NaN');
+
+// --- C. Regression Tests ---
+console.log('\n--- C. Regression Tests on Standard Inputs ---');
+
+// 11. Input 50000 tetap menghasilkan 50.000
+const normCurr = sanitizeNumericInput('50000', { isCurrency: true, allowNegative: false });
+assert(normCurr.value === 50000 && normCurr.formatted === '50.000', 'C.11 Input 50000 tetap menghasilkan format "50.000"');
+
+// 12. Paste 1.500.000 tetap benar
+const pasteNorm = sanitizeNumericInput('1.500.000', { isCurrency: true, allowNegative: false });
+assert(pasteNorm.value === 1500000 && pasteNorm.formatted === '1.500.000', 'C.12 Paste "1.500.000" menghasilkan nilai numerik 1500000');
+
+// 13. Input desimal 18.5 tetap benar
+const normDec = sanitizeNumericInput('18.5', { allowDecimals: true, allowNegative: false });
+assert(normDec.value === 18.5 && normDec.formatted === '18.5', 'C.13 Input desimal "18.5" tetap menghasilkan 18.5');
+
+// --- D. End Shift Critical Regression ---
+console.log('\n--- D. End Shift Critical Regression (Preservasi Selisih Negatif) ---');
+
+const endShiftBase: Shift = {
+  id: 'shift-end-test',
+  shift_number: 'SHF-END-01',
+  operational_date: '2026-03-01',
+  opened_by_user_id: 'usr-1',
+  opened_by_name: 'Kasir',
+  cash_initial: 500000,
+  status: 'closed',
+  opened_at: '2026-03-01T08:00:00.000Z',
+  closed_at: '2026-03-01T16:00:00.000Z',
+  created_at: '2026-03-01T08:00:00.000Z',
+};
+
+// Skenario 1 — Kekurangan kas: Kas seharusnya Rp 500.000, fisik Rp 450.000 -> Selisih -Rp 50.000
+const shiftDeficient = calculateShiftFinancials(
+  endShiftBase,
+  [], // Tanpa order tambahan
+  [],
+  [],
+  [],
+  { actual_cash_end: 450000 }
+);
+assert(shiftDeficient.expected_cash_end === 500000, 'D.S1 Kas seharusnya Rp 500.000');
+assert(shiftDeficient.actual_cash_end === 450000, 'D.S1 Kas fisik aktual Rp 450.000');
+assert(shiftDeficient.cash_difference === -50000, 'D.S1 Selisih kekurangan kas tetap negatif -Rp 50.000');
+assert(shiftDeficient.cash_status === 'shortage', 'D.S1 Status kas adalah "shortage" (kekurangan)');
+
+// Skenario 2 — Kelebihan kas: Kas seharusnya Rp 500.000, fisik Rp 550.000 -> Selisih Rp 50.000
+const shiftSurplus = calculateShiftFinancials(
+  endShiftBase,
+  [],
+  [],
+  [],
+  [],
+  { actual_cash_end: 550000 }
+);
+assert(shiftSurplus.expected_cash_end === 500000, 'D.S2 Kas seharusnya Rp 500.000');
+assert(shiftSurplus.actual_cash_end === 550000, 'D.S2 Kas fisik aktual Rp 550.000');
+assert(shiftSurplus.cash_difference === 50000, 'D.S2 Selisih kelebihan kas Rp 50.000');
+assert(shiftSurplus.cash_status === 'surplus', 'D.S2 Status kas adalah "surplus" (kelebihan)');
+
+// Skenario 3 — Selisih QRIS negatif: QRIS seharusnya Rp 25.000, fisik Rp 15.000 -> Selisih -Rp 10.000
+const mockOrderQris: Order = {
+  id: 'order-qris-1',
+  order_number: 'ORD-QRIS-01',
+  customer_name: 'Pelanggan QRIS',
+  order_type: 'take_away',
+  subtotal: 25000,
+  discount: 0,
+  tax: 0,
+  total_amount: 25000,
+  shift_id: 'shift-end-test',
+  payment: {
+    id: 'pay-qris-1',
+    order_id: 'order-qris-1',
+    method: 'qris',
+    status: 'completed',
+    amount_paid: 25000,
+    change: 0,
+  },
+  created_by_user_id: 'usr-1',
+  created_by_name: 'Kasir',
+  created_by_role: 'karyawan',
+  created_at: '2026-03-01T10:00:00.000Z',
+  items: [],
+};
+
+const shiftQrisNeg = calculateShiftFinancials(
+  endShiftBase,
+  [mockOrderQris],
+  [],
+  [],
+  [],
+  { actual_cash_end: 500000, actual_qris_end: 15000 }
+);
+assert(shiftQrisNeg.expected_qris_end === 25000, 'D.S3 QRIS seharusnya Rp 25.000');
+assert(shiftQrisNeg.actual_qris_end === 15000, 'D.S3 QRIS settlement aktual Rp 15.000');
+assert(shiftQrisNeg.qris_difference === -10000, 'D.S3 Selisih QRIS negatif tetap muncul sebagai -Rp 10.000');
+assert(shiftQrisNeg.qris_status === 'discrepancy', 'D.S3 Status QRIS adalah "discrepancy" (selisih)');
+
+// Skenario 4 — Input uang fisik aktual: tidak dapat dimasukkan sebagai angka negatif
+const physicalCashNegative = sanitizeNumericInput('-450000', { isCurrency: true, allowNegative: false });
+assert(physicalCashNegative.isRejected === true && physicalCashNegative.value === 0, 'D.S4 Input uang fisik aktual -450.000 ditolak dan tidak diubah menjadi positif');
+
+console.log('\n====================================================');
+console.log('   SELURUH CHECKLIST FORMATTING & T1-06 LULUS (PASS)!  ');
 console.log('====================================================');

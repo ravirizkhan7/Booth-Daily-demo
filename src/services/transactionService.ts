@@ -48,14 +48,16 @@ export const transactionService = {
       0
     );
 
-    const isVip = Boolean(payload.is_vip || payload.order_area === 'vip');
+    const isTakeAway = payload.order_type === 'take_away';
+    const isVip = !isTakeAway && Boolean(payload.is_vip || payload.order_area === 'vip');
+    const effectiveOrderArea = isVip ? ('vip' as const) : ('regular' as const);
     const preview = calculateOrderPreview(
       rawSubtotal,
       discountRules,
       settings?.tax_percentage ?? 0,
       {
+        orderType: payload.order_type,
         isVip,
-        vipDiscountPercentage: settings?.vip_discount_percentage,
         vipTaxPercentage: settings?.vip_tax_percentage,
         vipServiceChargePercentage: settings?.vip_room_service_charge_percentage,
       }
@@ -96,7 +98,7 @@ export const transactionService = {
     // 5. Construct order entity payload
     const orderPayload = {
       order_type: payload.order_type,
-      order_area: isVip ? ('vip' as const) : ('regular' as const),
+      order_area: effectiveOrderArea,
       is_vip: isVip,
       customer_name:
         payload.customer_name?.trim() ||

@@ -15,6 +15,7 @@ export const initialSettings: Settings = {
   report_signer_name: '',
   report_city: '',
   vip_discount_percentage: 0,
+  vip_discount_legacy_migrated: true,
   vip_tax_percentage: null,
   vip_room_service_charge_percentage: 0,
 };

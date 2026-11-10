@@ -12,6 +12,7 @@ import { mockStore, StorageStatusInfo } from '../mock/store';
 import { saveSecondaryCache, getRestoreJournal, getFactoryResetJournal, FACTORY_RESET_JOURNAL_KEY } from '../mock/persistence/storage';
 import { backupService, RecoveryResult } from '../services/backupService';
 import { factoryResetService } from '../services/factoryResetService';
+import { recordActivitySafe } from '../mock/watermark/watermark.activity';
 
 import { usePOSToast } from './pos/usePOSToast';
 import { usePOSAuth } from './pos/usePOSAuth';
@@ -46,8 +47,8 @@ interface POSContextType {
   setSettings: React.Dispatch<React.SetStateAction<Settings>>;
   discountRules: DiscountRule[];
   refreshDiscounts: () => Promise<DiscountRule[]>;
-  addDiscountRule: (payload: { name: string; minimum_purchase: number; discount_percentage: number; is_active?: boolean }) => Promise<DiscountRule>;
-  editDiscountRule: (id: number | string, payload: { name?: string; minimum_purchase?: number; discount_percentage?: number; is_active?: boolean }) => Promise<DiscountRule>;
+  addDiscountRule: (payload: { name: string; minimum_purchase: number; discount_percentage: number; is_active?: boolean; scope?: 'general' | 'vip' }) => Promise<DiscountRule>;
+  editDiscountRule: (id: number | string, payload: { name?: string; minimum_purchase?: number; discount_percentage?: number; is_active?: boolean; scope?: 'general' | 'vip' }) => Promise<DiscountRule>;
   toggleDiscountRuleStatus: (id: number | string) => Promise<DiscountRule>;
   removeDiscountRule: (id: number | string) => Promise<boolean>;
 
@@ -139,6 +140,10 @@ interface POSContextType {
   openPinModal: () => void;
   closePinModal: () => void;
   processPaymentWithPin: (pin: string, paymentMethod: PaymentMethod, amountPaid: number) => Promise<{ success: boolean; message: string; order?: Order }>;
+  /**
+   * @deprecated JALUR OPERASIONAL DITUTUP.
+   * Direct refund pada POSContext dinonaktifkan. Gunakan refundService untuk alur refund resmi.
+   */
   refundOrder: (orderId: string, metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }) => Promise<{ success: boolean; message: string; order?: Order }>;
 
   // Receipt Modal
@@ -590,6 +595,9 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     onOrderCreated: (newOrder) => {
       setOrders(prev => [newOrder, ...prev]);
       refreshShifts();
+      if (newOrder && newOrder.id) {
+        recordActivitySafe('TRANSACTION_SUCCESS', `txn:${newOrder.id}`);
+      }
     },
     onStockChange: refreshStocksAndHistories,
     showToast,
@@ -1121,6 +1129,87 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     );
   }
 
+  // SMART DEMO CONVERSION: Non-intrusive activity tracking wrappers
+  const addProductTracked: typeof addProduct = async (...args) => {
+    const res = await addProduct(...args);
+    if (res && res.id) {
+      recordActivitySafe('PRODUCT_UPSERT', `product:add:${res.id}`);
+    }
+    return res;
+  };
+
+  const editProductTracked: typeof editProduct = async (...args) => {
+    const res = await editProduct(...args);
+    if (res && res.id) {
+      recordActivitySafe('PRODUCT_UPSERT', `product:edit:${res.id}:${Date.now()}`);
+    }
+    return res;
+  };
+
+  const addCategoryTracked: typeof addCategory = async (...args) => {
+    const res = await addCategory(...args);
+    if (res && res.id) {
+      recordActivitySafe('CATEGORY_UPSERT', `category:add:${res.id}`);
+    }
+    return res;
+  };
+
+  const editCategoryTracked: typeof editCategory = async (...args) => {
+    const res = await editCategory(...args);
+    if (res && res.id) {
+      recordActivitySafe('CATEGORY_UPSERT', `category:edit:${res.id}:${Date.now()}`);
+    }
+    return res;
+  };
+
+  const addStockItemTracked: typeof addStockItem = async (...args) => {
+    const res = await addStockItem(...args);
+    if (res && res.id) {
+      recordActivitySafe('INVENTORY_MUTATION', `stock:add:${res.id}`);
+    }
+    return res;
+  };
+
+  const editStockItemTracked: typeof editStockItem = async (...args) => {
+    const res = await editStockItem(...args);
+    if (res && res.id) {
+      recordActivitySafe('INVENTORY_MUTATION', `stock:edit:${res.id}:${Date.now()}`);
+    }
+    return res;
+  };
+
+  const adjustStockQuantityTracked: typeof adjustStockQuantity = async (...args) => {
+    const res = await adjustStockQuantity(...args);
+    if (res && res.id) {
+      recordActivitySafe('INVENTORY_MUTATION', `stock:adjust:${res.id}:${Date.now()}`);
+    }
+    return res;
+  };
+
+  const addPurchaseTracked: typeof addPurchase = async (...args) => {
+    const res = await addPurchase(...args);
+    if (res && res.id) {
+      recordActivitySafe('PURCHASE_NEW', `purchase:add:${res.id}`);
+    }
+    return res;
+  };
+
+  const openShiftTracked: typeof openShift = async (...args) => {
+    const res = await openShift(...args);
+    if (res && res.success && res.shift && res.shift.id) {
+      recordActivitySafe('SHIFT_MUTATION', `shift:open:${res.shift.id}`);
+    }
+    return res;
+  };
+
+  const closeShiftTracked: typeof closeShift = async (...args) => {
+    const res = await closeShift(...args);
+    if (res && res.success && res.shift && res.shift.id) {
+      recordActivitySafe('SHIFT_MUTATION', `shift:close:${res.shift.id}`);
+    }
+    return res;
+  };
+
   return (
     <POSContext.Provider
       value={{
@@ -1164,19 +1253,19 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         loginUser,
         logoutUser,
         updateCurrentUserAccount,
-        addProduct,
-        editProduct,
+        addProduct: addProductTracked,
+        editProduct: editProductTracked,
         removeProduct,
-        addCategory,
-        editCategory,
+        addCategory: addCategoryTracked,
+        editCategory: editCategoryTracked,
         removeCategory,
         saveRecipeData,
         removeRecipe,
-        addStockItem,
-        editStockItem,
+        addStockItem: addStockItemTracked,
+        editStockItem: editStockItemTracked,
         removeStockItem,
-        adjustStockQuantity,
-        addPurchase,
+        adjustStockQuantity: adjustStockQuantityTracked,
+        addPurchase: addPurchaseTracked,
         editPurchase,
         removePurchase,
         addToCart,
@@ -1210,8 +1299,8 @@ export const POSProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isCloseShiftModalOpen,
         openCloseShiftModal,
         closeCloseShiftModal,
-        openShift,
-        closeShift,
+        openShift: openShiftTracked,
+        closeShift: closeShiftTracked,
         reviewShift,
         correctShift,
         recordShiftExpense,

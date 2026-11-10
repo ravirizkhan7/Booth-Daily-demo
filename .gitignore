@@ -2,7 +2,21 @@ node_modules/
 build/
 dist/
 coverage/
+
+# Temporary audit and test artifacts
+/scratch/
+/screenshots/
+
+# Generated system files
+.system_generated/
+
+# Operating system and editor files
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Environment files
 *.log
 .env*
 !.env.example

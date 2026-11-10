@@ -30,7 +30,12 @@
     "validate:qris": "tsx src/mock/validation/validateQRISReconciliation.ts",
     "validate:shift-filters": "tsx src/mock/validation/validateShiftDateFilters.ts",
     "validate:report-users": "tsx src/mock/validation/validateReportUserFilter.ts",
-    "validate:vip-settings": "tsx src/mock/validation/validateVIPAndReportSettings.ts"
+    "validate:vip-settings": "tsx src/mock/validation/validateVIPAndReportSettings.ts",
+    "validate:settings-ux": "tsx src/mock/validation/validateSettingsUXRefinement.ts",
+    "validate:legacy-vip-discount": "tsx src/mock/validation/validateLegacyVIPDiscountDeprecation.ts",
+    "validate:refund": "tsx src/mock/validation/validateRefundWorkflow.ts",
+    "validate:refund-hardening": "tsx src/mock/validation/validateLegacyRefundHardening.ts",
+    "validate:cashier-disburse": "tsx src/mock/validation/validateCashierDisbursement.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

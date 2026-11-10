@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { usePOS } from '../hooks/usePOS';
 import { Category } from '../types';
 import { 
@@ -31,6 +31,63 @@ export const CategoriesPage: React.FC = () => {
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [deletingCategory, setDeletingCategory] = useState<Category | null>(null);
 
+  // F-07 Double-Submit Prevention Locks
+  const submitLock = useRef(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const deleteLock = useRef(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // F-08 Focus Management & Escape Ref
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerBtnRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isModalOpen) return;
+
+    // Set initial focus to the name input field
+    const timer = setTimeout(() => {
+      const input = modalRef.current?.querySelector<HTMLInputElement>('input[type="text"]');
+      input?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (!isSubmitting) {
+          e.preventDefault();
+          setIsModalOpen(false);
+        }
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (triggerBtnRef.current && typeof triggerBtnRef.current.focus === 'function') {
+        triggerBtnRef.current.focus();
+      }
+    };
+  }, [isModalOpen, isSubmitting]);
+
   const [formData, setFormData] = useState({
     name: '',
     icon_name: 'Coffee',
@@ -54,6 +111,7 @@ export const CategoriesPage: React.FC = () => {
   );
 
   const handleOpenAdd = () => {
+    triggerBtnRef.current = document.activeElement as HTMLElement | null;
     setEditingCategory(null);
     setFormError('');
     setFormData({
@@ -65,6 +123,7 @@ export const CategoriesPage: React.FC = () => {
   };
 
   const handleOpenEdit = (c: Category) => {
+    triggerBtnRef.current = document.activeElement as HTMLElement | null;
     setEditingCategory(c);
     setFormError('');
     setFormData({
@@ -76,18 +135,31 @@ export const CategoriesPage: React.FC = () => {
   };
 
   const handleDeleteConfirm = async () => {
-    if (!deletingCategory) return;
-    await removeCategory(deletingCategory.id);
-    setDeletingCategory(null);
+    if (!deletingCategory || deleteLock.current) return;
+    deleteLock.current = true;
+    setIsDeleting(true);
+    try {
+      await removeCategory(deletingCategory.id);
+      setDeletingCategory(null);
+    } catch (err) {
+      console.error('Delete category error:', err);
+    } finally {
+      deleteLock.current = false;
+      setIsDeleting(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLock.current) return;
+
     if (!formData.name.trim()) {
       setFormError('Nama kategori wajib diisi');
       return;
     }
 
+    submitLock.current = true;
+    setIsSubmitting(true);
     try {
       if (editingCategory) {
         await editCategory(editingCategory.id, formData);
@@ -97,6 +169,9 @@ export const CategoriesPage: React.FC = () => {
       setIsModalOpen(false);
     } catch (err: any) {
       setFormError(err.message || 'Gagal menyimpan kategori');
+    } finally {
+      submitLock.current = false;
+      setIsSubmitting(false);
     }
   };
 
@@ -146,11 +221,12 @@ export const CategoriesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Table List */}
+      {/* Table & Mobile Cards List */}
       <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
+        {/* Desktop View (>= md: 768px) */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left text-xs min-w-[550px]">
-            <thead className="bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider">
+            <thead className="sticky top-0 z-10 bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider shadow-2xs">
               <tr>
                 <th className="p-4">Icon</th>
                 <th className="p-4">Nama Kategori</th>
@@ -192,16 +268,18 @@ export const CategoriesPage: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => handleOpenEdit(cat)}
-                            className="p-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 transition-colors cursor-pointer"
+                            className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373]"
                             title="Edit Kategori"
+                            aria-label={`Edit kategori ${cat.name}`}
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
                           <button
                             type="button"
                             onClick={() => setDeletingCategory(cat)}
-                            className="p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer"
+                            className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-rose-500"
                             title="Hapus Kategori"
+                            aria-label={`Hapus kategori ${cat.name}`}
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -213,6 +291,62 @@ export const CategoriesPage: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile View (< md: 768px) - Responsive Touch Cards */}
+        <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800/80 bg-white dark:bg-[#1E1C1A]">
+          {paginatedCategories.length === 0 ? (
+            <div className="p-8 text-center text-stone-400 font-semibold text-xs">
+              Tidak ada kategori ditemukan.
+            </div>
+          ) : (
+            paginatedCategories.map(cat => {
+              const menuCount = products.filter(p => p.category_id === cat.id).length;
+              return (
+                <div key={`mobile-cat-${cat.id}`} className="p-4 space-y-3 hover:bg-stone-50/50 dark:hover:bg-[#25221F] transition-colors">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="w-10 h-10 rounded-2xl bg-[#3B2A1F]/10 dark:bg-[#D4A373]/10 border border-[#3B2A1F]/20 flex items-center justify-center shrink-0">
+                        {getIconComponent(cat.icon_name)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-extrabold text-stone-900 dark:text-stone-100 text-sm truncate">
+                          {cat.name}
+                        </p>
+                        <p className="font-mono text-stone-400 text-xs">
+                          /{cat.slug}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-[#C68B59]/10 text-[#C68B59] font-black text-xs shrink-0">
+                      {menuCount} Produk
+                    </span>
+                  </div>
+
+                  <div className="pt-1 flex items-center justify-end gap-2 border-t border-stone-100 dark:border-stone-800/60">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(cat)}
+                      className="flex-1 min-h-[44px] py-2 px-3 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 text-stone-700 dark:text-stone-300 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      aria-label={`Edit kategori ${cat.name}`}
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-[#C68B59]" />
+                      Edit Kategori
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeletingCategory(cat)}
+                      className="min-h-[44px] py-2 px-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/20 hover:bg-rose-100 text-rose-600 dark:text-rose-400 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                      aria-label={`Hapus kategori ${cat.name}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Hapus
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
 
         {/* Pagination Controls */}
@@ -246,17 +380,25 @@ export const CategoriesPage: React.FC = () => {
       {/* Modal Add/Edit Category */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
+          <div 
+            ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="category-modal-title"
+            className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800"
+          >
             <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
-              <h3 className="font-extrabold text-base text-stone-900 dark:text-stone-100">
+              <h3 id="category-modal-title" className="font-extrabold text-base text-stone-900 dark:text-stone-100">
                 {editingCategory ? 'Edit Kategori' : 'Tambah Kategori Baru'}
               </h3>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
+                disabled={isSubmitting}
+                onClick={() => !isSubmitting && setIsModalOpen(false)}
+                aria-label="Tutup modal kategori"
+                className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5" aria-hidden="true" />
               </button>
             </div>
 
@@ -310,16 +452,22 @@ export const CategoriesPage: React.FC = () => {
               <div className="flex flex-col-reverse sm:flex-row justify-end gap-2.5 pt-3 border-t border-stone-100 dark:border-stone-800">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                  disabled={isSubmitting}
+                  onClick={() => !isSubmitting && setIsModalOpen(false)}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-extrabold shadow-md transition-all cursor-pointer"
+                  disabled={isSubmitting}
+                  className={`w-full sm:w-auto px-5 py-2.5 rounded-xl font-extrabold shadow-md transition-all ${
+                    isSubmitting
+                      ? 'bg-stone-400 dark:bg-stone-700 text-stone-200 cursor-not-allowed shadow-none'
+                      : 'bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] cursor-pointer'
+                  }`}
                 >
-                  {editingCategory ? 'Simpan Perubahan' : 'Tambah Kategori'}
+                  {isSubmitting ? 'Menyimpan...' : (editingCategory ? 'Simpan Perubahan' : 'Tambah Kategori')}
                 </button>
               </div>
             </form>
@@ -330,11 +478,12 @@ export const CategoriesPage: React.FC = () => {
       {/* Delete Confirmation Dialog */}
       <ConfirmDialog
         isOpen={!!deletingCategory}
+        isLoading={isDeleting}
         title="Hapus Kategori?"
         message={`Apakah Anda yakin ingin menghapus kategori "${deletingCategory?.name}"?`}
         confirmText="Ya, Hapus Kategori"
         onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeletingCategory(null)}
+        onCancel={() => !isDeleting && setDeletingCategory(null)}
       />
     </div>
   );

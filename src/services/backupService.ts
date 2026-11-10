@@ -78,6 +78,7 @@ export interface BackupPreviewSummary {
   stocks_count: number;
   recipes_count: number;
   expenses_count?: number;
+  refund_requests_count?: number;
   has_active_shift: boolean;
   has_app_logo: boolean;
   has_printer_logo: boolean;
@@ -496,6 +497,23 @@ export function validateBackupPayload(payload: any): BackupPayload {
     }
   }
 
+  // 8b. Validasi Pengajuan Refund (Refund Requests)
+  if (store.refundRequests === undefined) {
+    store.refundRequests = [];
+  } else {
+    if (!Array.isArray(store.refundRequests)) {
+      throw new Error('Data pengajuan refund (refundRequests) tidak valid.');
+    }
+    for (const r of store.refundRequests) {
+      if (!r || typeof r !== 'object' || !r.id || !r.order_id || !r.approval_status || !r.disbursement_status) {
+        throw new Error('Integritas data pengajuan refund rusak.');
+      }
+      if (r.evidence_image_url && typeof r.evidence_image_url !== 'string') {
+        throw new Error('Format bukti foto refund tidak valid.');
+      }
+    }
+  }
+
   // 9. Validasi Media (Logo Aplikasi & Printer)
   if (!media || typeof media !== 'object') {
     throw new Error('Struktur media logo tidak ditemukan dalam payload.');
@@ -542,6 +560,7 @@ function extractSummary(payload: BackupPayload): BackupPreviewSummary {
     stocks_count: payload.store.stocks?.length || 0,
     recipes_count: payload.store.recipes?.length || 0,
     expenses_count: payload.store.expenses?.length || 0,
+    refund_requests_count: payload.store.refundRequests?.length || 0,
     has_active_shift: Boolean(payload.store.activeShiftId),
     has_app_logo: Boolean(payload.media.app_logo),
     has_printer_logo: Boolean(payload.media.printer_logo),

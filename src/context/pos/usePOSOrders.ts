@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
 import { Order, PaymentMethod } from '../../types';
-import { orderService } from '../../services/orderService';
 import { ToastType } from './usePOSToast';
 
 export interface UsePOSOrdersProps {
@@ -12,31 +11,18 @@ export interface UsePOSOrdersProps {
 export const usePOSOrders = ({ currentUser, onStockChange, showToast }: UsePOSOrdersProps) => {
   const [orders, setOrders] = useState<Order[]>([]);
 
+  /**
+   * @deprecated JALUR OPERASIONAL DITUTUP.
+   * Direct refund melalui POSContext dinonaktifkan untuk mencegah bypass workflow.
+   * Seluruh refund operasional wajib melalui alur pengajuan dan persetujuan Owner via refundService.
+   */
   const refundOrder = async (
-    orderId: string,
-    metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }
+    _orderId: string,
+    _metadata?: { refunded_by_name?: string; refund_reason?: string; refund_method?: PaymentMethod }
   ): Promise<{ success: boolean; message: string; order?: Order }> => {
-    try {
-      const meta = {
-        refunded_by_name: currentUser?.role === 'owner' ? 'Owner' : (currentUser as any)?.name || 'Owner',
-        ...metadata,
-      };
-      const updatedOrder = await orderService.refundOrder(orderId, meta);
-      setOrders(prev => prev.map(o => String(o.id) === String(orderId) ? updatedOrder : o));
-
-      try {
-        await onStockChange();
-      } catch (syncErr) {
-        console.warn('Failed to refresh stocks after refund:', syncErr);
-      }
-
-      showToast(`Transaksi ${updatedOrder.order_number} berhasil direfund`, 'success');
-      return { success: true, message: 'Transaksi berhasil direfund', order: updatedOrder };
-    } catch (err: any) {
-      const errMsg = err?.response?.data?.message || err?.message || 'Gagal memproses refund';
-      showToast(errMsg, 'error');
-      return { success: false, message: errMsg };
-    }
+    const errMsg = 'Aksi ditolak: Direct refund dinonaktifkan pada jalur operasional POS. Pengembalian dana wajib melalui pengajuan kasir dan persetujuan Owner.';
+    showToast(errMsg, 'error');
+    return { success: false, message: errMsg };
   };
 
   const handleOrderCreatedRealtime = useCallback(async (newOrder: Order) => {

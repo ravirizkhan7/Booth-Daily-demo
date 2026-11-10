@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { usePOS } from '../hooks/usePOS';
-import { Shift, Order, ShiftExpense, ShiftExpenseCategory } from '../types';
+import { Shift, Order, ShiftExpense, ShiftExpenseCategory, RefundRequest } from '../types';
+import { refundService } from '../services/refundService';
 import { formatRupiah, formatDateTime, formatDate } from '../utils/formatters';
 import { calculateShiftFinancials, formatShiftDuration, getShiftQrisDisplayInfo, getOperationalDate } from '../utils/shiftCalculation';
 import { getOrderHPPCategory } from '../utils/reportUtils';
@@ -10,29 +11,23 @@ import {
   Clock,
   DoorOpen,
   Lock,
-  Calendar,
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
   Banknote,
-  QrCode,
   Eye,
   X,
-  User,
-  ShoppingBag,
-  TrendingUp,
   Receipt,
-  FileSpreadsheet,
   Check,
   ShieldCheck,
   ShieldAlert,
   Edit3,
   History,
-  FileText,
   PlusCircle,
   Trash2,
   ArrowRightLeft,
-  DollarSign
+  Smartphone,
+  Activity
 } from 'lucide-react';
 
 export const ShiftsPage: React.FC = () => {
@@ -161,11 +156,17 @@ export const ShiftsPage: React.FC = () => {
     return false;
   };
 
+  const [allRefundRequests, setAllRefundRequests] = useState<RefundRequest[]>([]);
+
+  useEffect(() => {
+    refundService.getRefundRequests().then(setAllRefundRequests).catch(() => {});
+  }, [orders, activeShift]);
+
   // Active shift financial snapshot
   const activeFinancials = useMemo(() => {
     if (!activeShift) return null;
-    return calculateShiftFinancials(activeShift, orders, products, recipes, stocks, undefined, activeExpenses);
-  }, [activeShift, orders, products, recipes, stocks, activeExpenses]);
+    return calculateShiftFinancials(activeShift, orders, products, recipes, stocks, undefined, activeExpenses, allRefundRequests);
+  }, [activeShift, orders, products, recipes, stocks, activeExpenses, allRefundRequests]);
 
   // Closed shifts visible based on role and responsibility
   const closedShifts = useMemo(() => {
@@ -574,8 +575,8 @@ export const ShiftsPage: React.FC = () => {
       ? activeExpenses
       : (shiftExpenses || []).filter(e => e.shift_id === currentSelectedShift.id);
     const financials = isCurrentActive
-      ? calculateShiftFinancials(currentSelectedShift, orders, products, recipes, stocks, undefined, shiftExpenseList)
-      : (currentSelectedShift.snapshot || calculateShiftFinancials(currentSelectedShift, orders, products, recipes, stocks, undefined, shiftExpenseList));
+      ? calculateShiftFinancials(currentSelectedShift, orders, products, recipes, stocks, undefined, shiftExpenseList, allRefundRequests)
+      : (currentSelectedShift.snapshot || calculateShiftFinancials(currentSelectedShift, orders, products, recipes, stocks, undefined, shiftExpenseList, allRefundRequests));
 
     const shiftOrders = orders.filter(o => o.shift_id === currentSelectedShift.id);
     const shiftRefundOrders = orders.filter(o => {
@@ -678,10 +679,11 @@ export const ShiftsPage: React.FC = () => {
       )}
 
       {/* ======================================================== */}
-      {/* SECTION 1: RINGKASAN SHIFT AKTIF                          */}
+      {/* SECTION 1: KONSOLIDASI SHIFT AKTIF (3 BLOK KEUANGAN)      */}
       {/* ======================================================== */}
       {activeShift && activeFinancials ? (
-        <div className="bg-white dark:bg-[#1A1816] rounded-3xl p-5 sm:p-6 shadow-sm border border-stone-200/80 dark:border-stone-800 space-y-4">
+        <div className="bg-white dark:bg-[#1A1816] rounded-3xl p-5 sm:p-6 shadow-sm border border-stone-200/80 dark:border-stone-800 space-y-5">
+          {/* Header Shift Aktif */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 dark:border-stone-800/80 pb-4">
             <div className="flex items-center gap-3">
               <span className="relative flex h-3 w-3">
@@ -689,16 +691,21 @@ export const ShiftsPage: React.FC = () => {
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
               </span>
               <div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                  Shift #{activeShift.shift_number} Sedang Aktif
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                    Shift #{activeShift.shift_number} Sedang Aktif
+                  </span>
+                  <span className="text-xs font-bold text-stone-500 dark:text-stone-400">
+                    Hari Operasional: <strong className="text-stone-800 dark:text-stone-200">{activeShift.operational_date || formatDate(activeShift.opened_at)}</strong>
+                  </span>
+                </div>
                 <p className="text-sm font-bold text-stone-800 dark:text-stone-200 mt-1">
-                  Dibuka oleh: <strong className="text-stone-900 dark:text-stone-100">{activeShift.opened_by_name}</strong>
+                  Petugas Pembuka: <strong className="text-stone-900 dark:text-stone-100">{activeShift.opened_by_name}</strong>
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-stone-500">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-stone-500">
               <Clock className="w-4 h-4 text-[#C68B59]" />
               <span>Durasi Berjalan: <strong className="text-stone-800 dark:text-stone-200">{formatShiftDuration(activeShift.opened_at)}</strong></span>
               <span className="text-stone-300 dark:text-stone-700">|</span>
@@ -706,85 +713,146 @@ export const ShiftsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Stat Metric Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
-            <div className="p-3.5 bg-stone-50 dark:bg-[#22201D] rounded-2xl border border-stone-100 dark:border-stone-800/80">
-              <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Modal Awal</span>
-              <p className="text-base font-extrabold text-stone-800 dark:text-stone-200 mt-1">
-                {formatRupiah(activeFinancials.cash_initial)}
-              </p>
+          {/* 3 Visual Financial Blocks */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            {/* BLOK A: Uang Kas Fisik Laci (lg:col-span-6) */}
+            <div className="lg:col-span-6 bg-stone-50/70 dark:bg-[#201D1A] rounded-2xl p-4 border border-stone-200/70 dark:border-stone-800/80 space-y-3">
+              <div className="flex items-center justify-between border-b border-stone-200/50 dark:border-stone-800/60 pb-2">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-stone-700 dark:text-stone-300 flex items-center gap-1.5">
+                  <Banknote className="w-4 h-4 text-[#C68B59]" />
+                  Uang Kas Fisik Laci
+                </span>
+                <span className="text-[10px] font-bold text-stone-400 uppercase bg-stone-200/50 dark:bg-stone-800 px-2 py-0.5 rounded">Fisik Tunai</span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                <div className="p-3 bg-white dark:bg-[#171514] rounded-xl border border-stone-100 dark:border-stone-800">
+                  <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Modal Awal</span>
+                  <p className="text-sm font-extrabold text-stone-800 dark:text-stone-200 mt-0.5">
+                    {formatRupiah(activeFinancials.cash_initial)}
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white dark:bg-[#171514] rounded-xl border border-stone-100 dark:border-stone-800">
+                  <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Penjualan Tunai</span>
+                  <p className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                    +{formatRupiah(activeFinancials.cash_sales)}
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white dark:bg-[#171514] rounded-xl border border-stone-100 dark:border-stone-800">
+                  <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Kas Keluar (-)</span>
+                  <p className="text-sm font-extrabold text-rose-500 mt-0.5">
+                    -{formatRupiah(activeFinancials.cash_expenses || 0)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Kas Harapan di Laci Hero Callout */}
+              <div className="p-3.5 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent dark:from-amber-950/40 dark:via-amber-950/20 dark:to-transparent rounded-xl border border-amber-300/40 dark:border-amber-700/40 flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-extrabold uppercase text-[#C68B59] dark:text-[#D4A373] tracking-wider block">
+                    Kas Harapan di Laci (Harus Ada)
+                  </span>
+                  <span className="text-[10px] text-stone-400">Modal + Tunai - Kas Keluar - Refund Tunai</span>
+                </div>
+                <p className="text-lg font-black text-[#3B2A1F] dark:text-[#D4A373]">
+                  {formatRupiah(activeFinancials.expected_cash_end)}
+                </p>
+              </div>
             </div>
 
-            <div className="p-3.5 bg-stone-50 dark:bg-[#22201D] rounded-2xl border border-stone-100 dark:border-stone-800/80">
-              <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Penjualan Tunai</span>
-              <p className="text-base font-extrabold text-emerald-600 dark:text-emerald-400 mt-1">
-                {formatRupiah(activeFinancials.cash_sales)}
-              </p>
+            {/* BLOK B: Transaksi Non-Tunai (QRIS) (lg:col-span-3) */}
+            <div className="lg:col-span-3 bg-stone-50/70 dark:bg-[#201D1A] rounded-2xl p-4 border border-stone-200/70 dark:border-stone-800/80 flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between border-b border-stone-200/50 dark:border-stone-800/60 pb-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-stone-700 dark:text-stone-300 flex items-center gap-1.5">
+                    <Smartphone className="w-4 h-4 text-blue-500" />
+                    Transaksi Non-Tunai
+                  </span>
+                  <span className="text-[10px] font-bold text-blue-500 uppercase bg-blue-50 dark:bg-blue-950/40 px-1.5 py-0.5 rounded">Digital</span>
+                </div>
+
+                <div className="p-3 bg-white dark:bg-[#171514] rounded-xl border border-stone-100 dark:border-stone-800 mt-3">
+                  <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Penjualan QRIS</span>
+                  <p className="text-base font-extrabold text-stone-800 dark:text-stone-200 mt-1">
+                    {formatRupiah(activeFinancials.qris_sales)}
+                  </p>
+                  {activeFinancials.qris_refunds > 0 && (
+                    <p className="text-[11px] text-rose-500 font-bold mt-0.5">
+                      Refund QRIS: -{formatRupiah(activeFinancials.qris_refunds)}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200/50 dark:border-blue-900/40 text-[10px] text-blue-800 dark:text-blue-300">
+                <p className="font-semibold">Masuk ke rekening/settlement bank</p>
+                <p className="text-blue-600 dark:text-blue-400 text-[9px] mt-0.5">Tidak masuk ke laci kas fisik.</p>
+              </div>
             </div>
 
-            <div className="p-3.5 bg-stone-50 dark:bg-[#22201D] rounded-2xl border border-stone-100 dark:border-stone-800/80">
-              <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Penjualan QRIS</span>
-              <p className="text-base font-extrabold text-stone-800 dark:text-stone-200 mt-1">
-                {formatRupiah(activeFinancials.qris_sales)}
-              </p>
-            </div>
+            {/* BLOK C: Aktivitas Operasional (lg:col-span-3) */}
+            <div className="lg:col-span-3 bg-stone-50/70 dark:bg-[#201D1A] rounded-2xl p-4 border border-stone-200/70 dark:border-stone-800/80 flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between border-b border-stone-200/50 dark:border-stone-800/60 pb-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-stone-700 dark:text-stone-300 flex items-center gap-1.5">
+                    <Activity className="w-4 h-4 text-emerald-500" />
+                    Operasional
+                  </span>
+                  <span className="text-[10px] font-bold text-stone-400 uppercase">Aktivitas</span>
+                </div>
 
-            <div className="p-3.5 bg-stone-50 dark:bg-[#22201D] rounded-2xl border border-stone-100 dark:border-stone-800/80">
-              <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Kas Keluar (-)</span>
-              <p className="text-base font-extrabold text-rose-500 mt-1">
-                -{formatRupiah(activeFinancials.cash_expenses || 0)}
-              </p>
-            </div>
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <div className="p-3 bg-white dark:bg-[#171514] rounded-xl border border-stone-100 dark:border-stone-800">
+                    <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Pesanan</span>
+                    <p className="text-sm font-extrabold text-stone-800 dark:text-stone-200 mt-1">
+                      {activeFinancials.total_orders_count}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-white dark:bg-[#171514] rounded-xl border border-stone-100 dark:border-stone-800">
+                    <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Omset Bruto</span>
+                    <p className="text-sm font-extrabold text-[#3B2A1F] dark:text-[#D4A373] mt-1">
+                      {formatRupiah(activeFinancials.gross_sales)}
+                    </p>
+                  </div>
+                </div>
+              </div>
 
-            <div className="p-3.5 bg-stone-50 dark:bg-[#22201D] rounded-2xl border border-stone-100 dark:border-stone-800/80">
-              <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Refund Tercatat</span>
-              <p className="text-base font-extrabold text-rose-500 mt-1">
-                {formatRupiah(activeFinancials.cash_refunds + activeFinancials.qris_refunds)}
-              </p>
-            </div>
-
-            <div className="p-3.5 bg-stone-50 dark:bg-[#22201D] rounded-2xl border border-stone-100 dark:border-stone-800/80">
-              <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Kas Harapan di Laci</span>
-              <p className="text-base font-black text-[#C68B59] mt-1">
-                {formatRupiah(activeFinancials.expected_cash_end)}
-              </p>
-            </div>
-
-            <div className="p-3.5 bg-stone-50 dark:bg-[#22201D] rounded-2xl border border-stone-100 dark:border-stone-800/80">
-              <span className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Transaksi Shift</span>
-              <p className="text-base font-extrabold text-stone-800 dark:text-stone-200 mt-1">
-                {activeFinancials.total_orders_count} Pesanan
-              </p>
+              <div className="p-2.5 rounded-xl bg-stone-100 dark:bg-stone-800/60 text-[10px] text-stone-500 dark:text-stone-400">
+                <span>Cutoff: <strong>{settings?.operational_day_cutoff_time || '04:00'} WIB</strong></span>
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-stone-100 dark:border-stone-800/80 text-xs">
+          {/* Action Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-stone-100 dark:border-stone-800/80 text-xs">
             <span className="text-stone-500">
-              Hari Operasional: <strong>{activeShift.operational_date || formatDate(activeShift.opened_at)}</strong> (Cutoff: {settings?.operational_day_cutoff_time || '04:00'})
+              ID Shift: <span className="font-mono text-stone-700 dark:text-stone-300 font-bold">{activeShift.id}</span>
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setIsRecordExpenseModalOpen(true)}
-                className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                className="min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
               >
-                <Banknote className="w-3.5 h-3.5" />
+                <Banknote className="w-4 h-4" />
                 <span>Catat Kas Keluar</span>
               </button>
               <button
                 type="button"
                 onClick={() => setSelectedShiftForDetail(activeShift)}
-                className="px-3.5 py-1.5 rounded-xl border border-stone-200 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                className="min-h-[44px] px-4 py-2 rounded-xl border border-stone-200 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <Eye className="w-3.5 h-3.5" />
+                <Eye className="w-4 h-4" />
                 <span>Lihat Laporan Sementara</span>
               </button>
               <button
                 type="button"
                 onClick={openCloseShiftModal}
-                className="px-3.5 py-1.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                className="min-h-[44px] px-4 py-2 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
               >
-                <Lock className="w-3.5 h-3.5 text-[#D4A373]" />
+                <Lock className="w-4 h-4 text-[#D4A373]" />
                 <span>Tutup Shift Sekarang</span>
               </button>
             </div>
@@ -808,91 +876,13 @@ export const ShiftsPage: React.FC = () => {
           <button
             type="button"
             onClick={openOpenShiftModal}
-            className="px-5 py-2.5 bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-black text-xs rounded-2xl shadow-md transition-all cursor-pointer flex items-center gap-2 shrink-0"
+            className="min-h-[44px] px-5 py-2.5 bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-black text-xs rounded-2xl shadow-md transition-all cursor-pointer flex items-center gap-2 shrink-0"
           >
             <DoorOpen className="w-4 h-4 text-[#D4A373]" />
             <span>Buka Shift Baru</span>
           </button>
         </div>
       )}
-
-      {/* ======================================================== */}
-      {/* SECTION 2: TABEL OPEN SHIFT (Shift Aktif)                 */}
-      {/* ======================================================== */}
-      <div className="bg-white dark:bg-[#1A1816] rounded-3xl p-5 sm:p-6 shadow-sm border border-stone-200/80 dark:border-stone-800 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-            <h2 className="text-base font-extrabold text-stone-900 dark:text-stone-100">
-              Tabel Open Shift (Sedang Berjalan)
-            </h2>
-          </div>
-          <span className="text-xs text-stone-500">
-            {activeShift ? '1 shift aktif' : '0 shift aktif'}
-          </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-stone-50 dark:bg-[#22201D] text-stone-500 uppercase text-[10px] font-bold">
-              <tr>
-                <th className="p-3 rounded-l-xl">No. Shift</th>
-                <th className="p-3">Waktu Buka</th>
-                <th className="p-3">Petugas Pembuka</th>
-                <th className="p-3">Modal Awal</th>
-                <th className="p-3">Hari Operasional</th>
-                <th className="p-3">Durasi</th>
-                <th className="p-3">Status</th>
-                <th className="p-3 text-right rounded-r-xl">Aksi</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-100 dark:divide-stone-800/80 font-medium">
-              {activeShift ? (
-                <tr className="hover:bg-stone-50/50 dark:hover:bg-stone-900/30 transition-colors">
-                  <td className="p-3 font-extrabold text-stone-900 dark:text-stone-100">
-                    #{activeShift.shift_number}
-                  </td>
-                  <td className="p-3 text-stone-600 dark:text-stone-300">
-                    {formatDateTime(activeShift.opened_at)}
-                  </td>
-                  <td className="p-3 font-bold text-stone-900 dark:text-stone-100">
-                    {activeShift.opened_by_name}
-                  </td>
-                  <td className="p-3 font-semibold text-[#C68B59]">
-                    {formatRupiah(activeShift.cash_initial)}
-                  </td>
-                  <td className="p-3 text-stone-500">
-                    {activeShift.operational_date || formatDate(activeShift.opened_at)}
-                  </td>
-                  <td className="p-3 text-stone-600 dark:text-stone-300 font-bold">
-                    {formatShiftDuration(activeShift.opened_at)}
-                  </td>
-                  <td className="p-3">
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                      Aktif
-                    </span>
-                  </td>
-                  <td className="p-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedShiftForDetail(activeShift)}
-                      className="px-3 py-1 bg-stone-100 dark:bg-stone-800 hover:bg-[#3B2A1F] hover:text-[#F7F5F2] rounded-lg font-bold transition-colors cursor-pointer text-[11px]"
-                    >
-                      Detail
-                    </button>
-                  </td>
-                </tr>
-              ) : (
-                <tr>
-                  <td colSpan={8} className="p-4 text-center text-stone-400 italic">
-                    Tidak ada shift yang sedang terbuka.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
 
       {/* ======================================================== */}
       {/* SECTION 3: TABEL CLOSED SHIFT (Histori Shift Selesai)     */}
@@ -940,17 +930,17 @@ export const ShiftsPage: React.FC = () => {
 
                 {/* Quick Period Buttons for Owner */}
                 <div className="flex items-center gap-1 bg-stone-100 dark:bg-stone-800 p-0.5 rounded-xl text-xs font-bold">
-                  {[
+                  {([
                     { id: 'all', label: 'Semua' },
                     { id: 'today', label: 'Hari Ini' },
                     { id: 'week', label: '7 Hari' },
                     { id: 'month', label: 'Bulan Ini' },
                     { id: 'custom', label: 'Kustom' },
-                  ].map(f => (
+                  ] as const).map(f => (
                     <button
                       key={f.id}
                       type="button"
-                      onClick={() => setFilterPeriod(f.id as any)}
+                      onClick={() => setFilterPeriod(f.id)}
                       className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
                         filterPeriod === f.id
                           ? 'bg-[#3B2A1F] text-[#F7F5F2]'
@@ -999,15 +989,15 @@ export const ShiftsPage: React.FC = () => {
             ) : (
               /* Cashier-specific Status Filter (eliminates unneeded Waktu Shift/Hari Operasional filters) */
               <div className="flex items-center gap-1 bg-stone-100 dark:bg-stone-800 p-0.5 rounded-xl text-xs font-bold">
-                {[
+                {([
                   { id: 'all', label: 'Semua Shift Saya' },
                   { id: 'correction_needed', label: 'Perlu Koreksi' },
                   { id: 'balanced', label: 'Selesai' },
-                ].map(f => (
+                ] as const).map(f => (
                   <button
                     key={f.id}
                     type="button"
-                    onClick={() => setCashierStatusFilter(f.id as any)}
+                    onClick={() => setCashierStatusFilter(f.id)}
                     className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
                       cashierStatusFilter === f.id
                         ? 'bg-[#3B2A1F] text-[#F7F5F2]'
@@ -1023,9 +1013,10 @@ export const ShiftsPage: React.FC = () => {
         </div>
 
         {/* Table of Closed Shifts */}
-        <div className="overflow-x-auto">
+        {/* Desktop View (>= xl: 1280px) */}
+        <div className="hidden xl:block overflow-x-auto max-h-[400px] overflow-y-auto">
           <table className="w-full text-xs text-left min-w-[950px]">
-            <thead className="bg-stone-50 dark:bg-[#22201D] text-stone-500 uppercase text-[10px] font-bold">
+            <thead className="sticky top-0 z-10 bg-stone-50 dark:bg-[#22201D] text-stone-500 uppercase text-[10px] font-bold">
               <tr>
                 <th className="p-3 rounded-l-xl">Shift</th>
                 <th className="p-3">Periode Buka / Tutup</th>
@@ -1228,6 +1219,161 @@ export const ShiftsPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Mobile & Tablet Card View (< xl: 1280px) */}
+        <div className="xl:hidden divide-y divide-stone-100 dark:divide-stone-800/80">
+          {filteredClosedShifts.length === 0 ? (
+            <div className="p-6 text-center text-stone-400 italic text-xs">
+              Belum ada data shift tertutup pada filter yang dipilih.
+            </div>
+          ) : (
+            filteredClosedShifts.map(s => {
+              const snap = s.snapshot;
+              const duration = formatShiftDuration(s.opened_at, s.closed_at);
+              const reconStatus = getShiftReconciliationStatus(s);
+              const reconMeta = getReconBadge(reconStatus);
+              const ReconIcon = reconMeta.icon;
+              const qrisInfo = getShiftQrisDisplayInfo(snap);
+
+              return (
+                <div key={`card-shift-${s.id}`} className="p-4 sm:p-5 space-y-3 hover:bg-stone-50/50 dark:hover:bg-stone-900/30 transition-colors">
+                  {/* Header: No. Shift, Durasi & Verification Badge */}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-stone-900 dark:text-stone-100 text-sm sm:text-base">
+                        #{s.shift_number}
+                      </span>
+                      <span className="text-[11px] font-semibold text-stone-400 bg-stone-100 dark:bg-stone-800 px-2 py-0.5 rounded-md">
+                        {duration}
+                      </span>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black shrink-0 ${reconMeta.badgeClass}`}>
+                      <ReconIcon className="w-3 h-3 shrink-0" />
+                      {reconMeta.label}
+                    </span>
+                  </div>
+
+                  {/* Waktu & Petugas */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-stone-50 dark:bg-[#171514] p-3 rounded-2xl border border-stone-100 dark:border-stone-800/80">
+                    <div>
+                      <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Waktu Operasional</span>
+                      <p className="font-semibold text-stone-800 dark:text-stone-200 mt-0.5">{formatDateTime(s.opened_at)}</p>
+                      <p className="text-[11px] text-stone-400">s/d {s.closed_at ? formatDateTime(s.closed_at) : '-'}</p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Petugas Shift</span>
+                      <p className="text-stone-700 dark:text-stone-300 mt-0.5">
+                        <span className="text-stone-400 text-[10px] font-bold uppercase">Buka:</span> <strong>{s.opened_by_name}</strong>
+                      </p>
+                      <p className="text-stone-700 dark:text-stone-300">
+                        <span className="text-stone-400 text-[10px] font-bold uppercase">Tutup:</span> <strong>{s.closed_by_name || '-'}</strong>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Owner Only: Penjualan Bersih & HPP / Laba */}
+                  {isOwner && (
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="p-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-100 dark:border-stone-800/80">
+                        <span className="text-[10px] font-bold text-stone-400 uppercase block">Penjualan Bersih</span>
+                        <p className="font-black text-stone-900 dark:text-stone-100 text-sm mt-0.5">
+                          {formatRupiah(snap?.net_sales ?? 0)}
+                        </p>
+                        <p className="text-[10px] text-stone-400">Bruto: {formatRupiah(snap?.gross_sales ?? 0)}</p>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-100 dark:border-stone-800/80">
+                        <span className="text-[10px] font-bold text-stone-400 uppercase block">Laba Kotor</span>
+                        <p className="font-black text-emerald-600 dark:text-emerald-400 text-sm mt-0.5">
+                          {formatRupiah(snap?.estimated_gross_profit ?? 0)}
+                        </p>
+                        <p className="text-[10px] text-stone-400">HPP: {formatRupiah(snap?.estimated_hpp ?? 0)}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Rekonsiliasi Kas & QRIS */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    {/* Kas Fisik */}
+                    <div className="p-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-100 dark:border-stone-800/80 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-stone-400 uppercase">Rekonsiliasi Kas</span>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
+                          snap?.cash_difference === 0
+                            ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400'
+                            : 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400'
+                        }`}>
+                          {snap?.cash_difference === 0 ? 'Sesuai' : `Selisih ${formatRupiah(snap?.cash_difference ?? 0)}`}
+                        </span>
+                      </div>
+                      <p className="font-bold text-stone-800 dark:text-stone-200">
+                        Aktual: {formatRupiah(snap?.actual_cash_end ?? 0)}
+                      </p>
+                      <p className="text-[10px] text-stone-400">
+                        Harapan: {formatRupiah(snap?.expected_cash_end ?? 0)}
+                      </p>
+                    </div>
+
+                    {/* QRIS */}
+                    <div className="p-2.5 rounded-xl bg-stone-50 dark:bg-[#171514] border border-stone-100 dark:border-stone-800/80 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-stone-400 uppercase">Rekonsiliasi QRIS</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                          qrisInfo.status === 'balanced'
+                            ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400'
+                            : qrisInfo.status === 'no_transaction'
+                            ? 'bg-stone-200/60 dark:bg-stone-800 text-stone-500'
+                            : 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400'
+                        }`}>
+                          {qrisInfo.status === 'balanced'
+                            ? 'Sesuai'
+                            : qrisInfo.status === 'no_transaction'
+                            ? 'Tidak ada'
+                            : 'Selisih'}
+                        </span>
+                      </div>
+                      {qrisInfo.status === 'no_transaction' ? (
+                        <p className="text-[11px] text-stone-400 italic">Tidak ada transaksi QRIS</p>
+                      ) : snap?.actual_qris_end !== null && snap?.actual_qris_end !== undefined ? (
+                        <>
+                          <p className="font-bold text-stone-800 dark:text-stone-200">
+                            Aktual: {formatRupiah(snap.actual_qris_end)}
+                          </p>
+                          <p className="text-[10px] text-stone-400">
+                            Selisih: {formatRupiah(snap.qris_difference || 0)}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400 font-bold">Belum direkonsiliasi</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Footer Actions: Koreksi & Laporan Detail */}
+                  <div className="pt-1 flex items-center justify-end gap-2 border-t border-stone-100 dark:border-stone-800/60">
+                    {reconStatus === 'correction_requested' && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCorrect(s)}
+                        className="min-h-[44px] px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all cursor-pointer text-xs shadow-sm flex items-center justify-center gap-1.5"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Koreksi Shift</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedShiftForDetail(s)}
+                      className="min-h-[44px] flex-1 sm:flex-none px-4 py-2 bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] rounded-xl font-bold transition-all cursor-pointer text-xs shadow-sm flex items-center justify-center text-center"
+                    >
+                      Lihat Laporan Detail
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
       </div>
 
       {/* ======================================================== */}
@@ -1400,6 +1546,14 @@ export const ShiftsPage: React.FC = () => {
                       {selectedDetailData.financials.cash_difference === 0 ? 'Sesuai (Rp 0)' : `${formatRupiah(selectedDetailData.financials.cash_difference)} (${selectedDetailData.financials.cash_status})`}
                     </span>
                   </div>
+                  {Number(selectedDetailData.financials.rejected_emergency_disbursements) > 0 && (
+                    <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-800 dark:text-amber-300 mt-2">
+                      <span className="font-bold block">⚠️ Catatan Investigasi Operasional:</span>
+                      <span>
+                        Terdapat {formatRupiah(selectedDetailData.financials.rejected_emergency_disbursements || 0)} pengeluaran darurat yang ditolak Owner (termasuk dalam pengurang kas laci fisik, menunggu rekonsiliasi).
+                      </span>
+                    </div>
+                  )}
 
                   {(selectedDetailData.financials.cash_difference !== 0 || currentSelectedShift?.snapshot?.cash_difference_reason) && (
                     <div className="bg-amber-50 dark:bg-amber-950/20 p-2.5 rounded-xl border border-amber-200/80 dark:border-amber-900/50 mt-1">

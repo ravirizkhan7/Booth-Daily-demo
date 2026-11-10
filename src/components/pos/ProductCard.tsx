@@ -106,12 +106,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, priority = fa
               e.stopPropagation();
               toggleFavorite(product.id);
             }}
+            aria-pressed={!!product.is_favorite}
+            aria-label={product.is_favorite ? `Hapus ${product.name} dari favorit` : `Tambah ${product.name} ke favorit`}
             className={`p-1.5 rounded-lg bg-white/80 dark:bg-black/60 backdrop-blur-sm transition-transform active:scale-90 shadow-sm shrink-0 ${product.is_favorite
               ? 'text-rose-500'
               : 'text-stone-400 hover:text-rose-500'
               }`}
           >
-            <Heart className={`w-3.5 h-3.5 ${product.is_favorite ? 'fill-rose-500 text-rose-500' : ''}`} />
+            <Heart className={`w-3.5 h-3.5 ${product.is_favorite ? 'fill-rose-500 text-rose-500' : ''}`} aria-hidden="true" />
           </button>
         </div>
 

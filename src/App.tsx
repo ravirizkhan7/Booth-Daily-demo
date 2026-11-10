@@ -1,6 +1,7 @@
 import React, { ReactNode, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { POSProvider } from './context/POSContext';
+import { WatermarkProvider } from './mock/watermark/WatermarkProvider';
 import { usePOS } from './hooks/usePOS';
 import { MainLayout } from './layouts/MainLayout';
 import { POSPage } from './pages/POSPage';
@@ -58,32 +59,34 @@ function PublicRoute({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <POSProvider>
-      <Router>
-        <Suspense fallback={<PageLoader />}>
-          <Routes>
-            {/* Guest / Public */}
-            <Route path="/" element={<PublicRoute><POSPage /></PublicRoute>} />
-            <Route path="/recipes" element={<PublicRoute><RecipesPage /></PublicRoute>} />
+      <WatermarkProvider>
+        <Router>
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              {/* Guest / Public */}
+              <Route path="/" element={<PublicRoute><POSPage /></PublicRoute>} />
+              <Route path="/recipes" element={<PublicRoute><RecipesPage /></PublicRoute>} />
 
-            {/* Owner + Karyawan */}
-            <Route path="/dashboard" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><DashboardPage /></ProtectedRoute>} />
-            <Route path="/inventory" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><InventoryPage /></ProtectedRoute>} />
-            <Route path="/transactions" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><TransactionsPage /></ProtectedRoute>} />
+              {/* Owner + Karyawan */}
+              <Route path="/dashboard" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><DashboardPage /></ProtectedRoute>} />
+              <Route path="/inventory" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><InventoryPage /></ProtectedRoute>} />
+              <Route path="/transactions" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><TransactionsPage /></ProtectedRoute>} />
 
-            {/* Owner + Karyawan */}
-            <Route path="/shifts" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><ShiftsPage /></ProtectedRoute>} />
-            <Route path="/products" element={<ProtectedRoute allowedRoles={['owner']}><ProductsPage /></ProtectedRoute>} />
-            <Route path="/categories" element={<ProtectedRoute allowedRoles={['owner']}><CategoriesPage /></ProtectedRoute>} />
-            <Route path="/purchases" element={<ProtectedRoute allowedRoles={['owner']}><PurchasesPage /></ProtectedRoute>} />
-            <Route path="/employees" element={<ProtectedRoute allowedRoles={['owner']}><EmployeesPage /></ProtectedRoute>} />
-            <Route path="/reports" element={<ProtectedRoute allowedRoles={['owner']}><ReportsPage /></ProtectedRoute>} />
-            <Route path="/settings" element={<ProtectedRoute allowedRoles={['owner']}><SettingsPage /></ProtectedRoute>} />
+              {/* Owner + Karyawan */}
+              <Route path="/shifts" element={<ProtectedRoute allowedRoles={['owner', 'karyawan']}><ShiftsPage /></ProtectedRoute>} />
+              <Route path="/products" element={<ProtectedRoute allowedRoles={['owner']}><ProductsPage /></ProtectedRoute>} />
+              <Route path="/categories" element={<ProtectedRoute allowedRoles={['owner']}><CategoriesPage /></ProtectedRoute>} />
+              <Route path="/purchases" element={<ProtectedRoute allowedRoles={['owner']}><PurchasesPage /></ProtectedRoute>} />
+              <Route path="/employees" element={<ProtectedRoute allowedRoles={['owner']}><EmployeesPage /></ProtectedRoute>} />
+              <Route path="/reports" element={<ProtectedRoute allowedRoles={['owner']}><ReportsPage /></ProtectedRoute>} />
+              <Route path="/settings" element={<ProtectedRoute allowedRoles={['owner']}><SettingsPage /></ProtectedRoute>} />
 
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
-      </Router>
+              {/* Fallback */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </Router>
+      </WatermarkProvider>
     </POSProvider>
   );
 }

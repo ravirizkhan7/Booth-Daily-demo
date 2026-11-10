@@ -18,9 +18,25 @@ export interface UsePOSCartProps {
 
 export const usePOSCart = ({ recipes, stocks, isShiftActive = false, showToast }: UsePOSCartProps) => {
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [orderType, setOrderType] = useState<OrderType>('dine_in');
-  const [orderArea, setOrderArea] = useState<OrderArea>('regular');
+  const [orderType, setOrderTypeState] = useState<OrderType>('dine_in');
+  const [orderArea, setOrderAreaState] = useState<OrderArea>('regular');
   const [customerName, setCustomerName] = useState<string>('');
+
+  const setOrderType = useCallback((newType: OrderType | ((prev: OrderType) => OrderType)) => {
+    setOrderTypeState(newType);
+    setOrderAreaState('regular');
+  }, []);
+
+  const setOrderArea = useCallback((newArea: OrderArea | ((prev: OrderArea) => OrderArea)) => {
+    setOrderAreaState(prev => {
+      const next = typeof newArea === 'function' ? newArea(prev) : newArea;
+      // Take Away orders must always force order_area to 'regular'
+      if (orderType === 'take_away') {
+        return 'regular';
+      }
+      return next;
+    });
+  }, [orderType]);
 
   const addToCart = useCallback((product: Product, quantityToAdd: number = 1) => {
     if (!isShiftActive) {

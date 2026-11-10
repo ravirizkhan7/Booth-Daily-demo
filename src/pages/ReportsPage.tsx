@@ -8,20 +8,24 @@ import {
 } from 'lucide-react';
 import { orderService } from '../services/orderService';
 import { Order } from '../types';
-import { computeReportData, DateFilterType } from '../utils/reportUtils';
+import { computeReportData, DateFilterType, getOperationalDate } from '../utils/reportUtils';
+import { recordActivitySafe } from '../mock/watermark/watermark.activity';
 
 export const ReportsPage: React.FC = () => {
-  const { orders, products, stocks, purchases, recipes, settings, currentUser, usersList, showToast, openReceiptModal } = usePOS();
+  const { orders, products, stocks, purchases, recipes, settings, currentUser, usersList, showToast, openReceiptModal, shifts } = usePOS();
+  const cutoffTime = settings?.operational_day_cutoff_time || '04:00';
 
   const [dateFilter, setDateFilter] = useState<DateFilterType>('month');
   const [activeTab, setActiveTab] = useState<'all' | 'sales' | 'purchases' | 'transactions' | 'refunds'>('all');
 
   const [startDate, setStartDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(1);
-    return d.toISOString().slice(0, 10);
+    const now = new Date();
+    const op = getOperationalDate(now, '04:00');
+    return `${op.slice(0, 7)}-01`;
   });
-  const [endDate, setEndDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState<string>(() => {
+    return getOperationalDate(new Date(), '04:00');
+  });
 
   const [reportOrders, setReportOrders] = useState<Order[]>(orders);
   const [isLoadingReport, setIsLoadingReport] = useState<boolean>(false);
@@ -44,10 +48,11 @@ export const ReportsPage: React.FC = () => {
 
         if (dateFilter === 'month') {
           const now = new Date();
-          const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-          const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-          startStr = `${firstDay.getFullYear()}-${String(firstDay.getMonth() + 1).padStart(2, '0')}-01`;
-          endStr = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+          const opDate = getOperationalDate(now, cutoffTime);
+          const [y, m] = opDate.split('-').map(Number);
+          const lastDay = new Date(y, m, 0).getDate();
+          startStr = `${y}-${String(m).padStart(2, '0')}-01`;
+          endStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
         }
 
         const fetchedOrders = await orderService.getOrders({
@@ -177,9 +182,10 @@ export const ReportsPage: React.FC = () => {
       userId: selectedUserId,
       userName: selectedUserOption.id !== 'all' ? selectedUserOption.name : undefined,
       userRole: selectedUserOption.id !== 'all' ? selectedUserOption.role : undefined,
-      settings
+      settings,
+      shifts
     });
-  }, [reportOrders, purchases, products, recipes, stocks, dateFilter, startDate, endDate, selectedUserId, selectedUserOption, settings]);
+  }, [reportOrders, purchases, products, recipes, stocks, dateFilter, startDate, endDate, selectedUserId, selectedUserOption, settings, shifts]);
 
   // Export Excel (.xlsx) — On-Demand Dynamic Import
   const handleExportXLSX = async () => {
@@ -195,6 +201,7 @@ export const ReportsPage: React.FC = () => {
         reportCity: settings?.report_city,
         filename: `Laporan_Keuangan_${effectiveStoreName.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
       });
+      recordActivitySafe('REPORT_EXPORT', `report:xlsx:${Date.now()}`);
       showToast('Laporan Excel (.xlsx) berhasil diunduh', 'success');
     } catch (err) {
       console.error('Export Excel failed:', err);
@@ -221,6 +228,7 @@ export const ReportsPage: React.FC = () => {
         reportCity: settings?.report_city,
         filename: `Laporan_Keuangan_${effectiveStoreName.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}`
       });
+      recordActivitySafe('REPORT_EXPORT', `report:pdf:${Date.now()}`);
       showToast('Laporan PDF berhasil dibuat.', 'success');
     } catch (err) {
       console.error('Export PDF failed:', err);
@@ -293,24 +301,36 @@ export const ReportsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Custom Date Inputs */}
+          {/* Custom Date Inputs (F-13: 2-column grid on mobile < 640px, inline on sm:) */}
           {dateFilter === 'custom' && (
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs font-bold w-full lg:w-auto bg-stone-50 dark:bg-[#171514] p-2 rounded-2xl border border-stone-200 dark:border-stone-800">
-              <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                <span className="text-stone-400 text-[11px] shrink-0 pl-1">Dari:</span>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={e => setStartDate(e.target.value)}
-                  className="w-full sm:w-auto px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#25221F] border border-stone-300 dark:border-stone-700 font-bold min-w-0 text-xs"
-                />
-                <span className="text-stone-400 text-[11px] shrink-0">s/d:</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={e => setEndDate(e.target.value)}
-                  className="w-full sm:w-auto px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#25221F] border border-stone-300 dark:border-stone-700 font-bold min-w-0 text-xs"
-                />
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs font-bold w-full lg:w-auto bg-stone-50 dark:bg-[#171514] p-2.5 sm:p-2 rounded-2xl border border-stone-200 dark:border-stone-800">
+              <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-1.5 flex-1 min-w-0">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-1.5">
+                  <label htmlFor="report-start-date" className="text-stone-400 text-[10px] sm:text-[11px] font-bold uppercase sm:normal-case shrink-0 sm:pl-1">
+                    Dari Tanggal:
+                  </label>
+                  <input
+                    id="report-start-date"
+                    type="date"
+                    value={startDate}
+                    onChange={e => setStartDate(e.target.value)}
+                    className="w-full sm:w-auto px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#25221F] border border-stone-300 dark:border-stone-700 font-bold min-w-0 text-xs"
+                    aria-label="Dari Tanggal"
+                  />
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-1.5">
+                  <label htmlFor="report-end-date" className="text-stone-400 text-[10px] sm:text-[11px] font-bold uppercase sm:normal-case shrink-0">
+                    Sampai Tanggal:
+                  </label>
+                  <input
+                    id="report-end-date"
+                    type="date"
+                    value={endDate}
+                    onChange={e => setEndDate(e.target.value)}
+                    className="w-full sm:w-auto px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#25221F] border border-stone-300 dark:border-stone-700 font-bold min-w-0 text-xs"
+                    aria-label="Sampai Tanggal"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -319,6 +339,9 @@ export const ReportsPage: React.FC = () => {
           <div className="flex items-center gap-2 text-xs font-bold text-stone-600 dark:text-stone-300 bg-stone-100 dark:bg-[#25221F] px-3.5 py-2 rounded-xl shrink-0">
             <Calendar className="w-3.5 h-3.5 text-[#C68B59]" />
             <span>{reportData.periodLabel}</span>
+            <span className="text-[10px] text-stone-500 font-semibold px-2 py-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800">
+              Cutoff {cutoffTime}
+            </span>
             {isLoadingReport && (
               <span className="text-[10px] text-[#C68B59] font-bold animate-pulse">
                 • Memuat data...
@@ -367,17 +390,17 @@ export const ReportsPage: React.FC = () => {
         <div className="w-full max-w-full overflow-x-auto min-w-0 scrollbar-none pt-2 border-t border-stone-100 dark:border-stone-800/80">
           <div className="inline-flex items-center gap-2 text-xs">
             <span className="text-stone-400 font-bold text-[11px] mr-1 hidden sm:inline shrink-0">Tampilan:</span>
-            {[
+            {([
               { id: 'all', label: 'Semua (Ringkasan Lengkap)' },
               { id: 'sales', label: 'Analisis Penjualan & Menu' },
               { id: 'purchases', label: 'Pembelian & Restok' },
               { id: 'transactions', label: 'Detail Transaksi Penjualan' },
               { id: 'refunds', label: `Daftar Refund (${reportData.refundCount})` }
-            ].map(tab => (
+            ] as const).map(tab => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => setActiveTab(tab.id)}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer whitespace-nowrap text-xs ${activeTab === tab.id
                   ? 'bg-[#C68B59]/15 text-[#C68B59] font-black'
                   : 'text-stone-500 hover:text-stone-800 dark:hover:text-stone-200'

@@ -109,7 +109,7 @@ export const DemoAccountsModal: React.FC<DemoAccountsModalProps> = ({ isOpen, on
                               onClick={() => handleCopy(user.username || '', 'Username', `${user.id}-username`)}
                               className="p-0.5 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 transition-colors"
                               title="Salin username"
-                              aria-label={`Salin username ${user.username}`}
+                              aria-label={copiedKey === `${user.id}-username` ? `Username ${user.name} berhasil disalin` : `Salin username akun demo (${user.name})`}
                             >
                               {copiedKey === `${user.id}-username` ? (
                                 <Check className="w-3 h-3 text-emerald-500" />
@@ -150,7 +150,7 @@ export const DemoAccountsModal: React.FC<DemoAccountsModalProps> = ({ isOpen, on
                         onClick={() => handleCopy(user.email, 'Email', `${user.id}-email`)}
                         className="p-1 sm:p-1.5 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 transition-colors shrink-0 cursor-pointer"
                         title="Salin email"
-                        aria-label={`Salin email ${user.email}`}
+                        aria-label={copiedKey === `${user.id}-email` ? `Email ${user.name} berhasil disalin` : `Salin email akun demo (${user.name})`}
                       >
                         {copiedKey === `${user.id}-email` ? (
                           <Check className="w-3.5 h-3.5 text-emerald-500" />
@@ -175,7 +175,7 @@ export const DemoAccountsModal: React.FC<DemoAccountsModalProps> = ({ isOpen, on
                         onClick={() => handleCopy(user.password || 'demo123', 'Password', `${user.id}-password`)}
                         className="p-1 sm:p-1.5 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 transition-colors shrink-0 cursor-pointer"
                         title="Salin password"
-                        aria-label={`Salin password ${user.name}`}
+                        aria-label={copiedKey === `${user.id}-password` ? `Password ${user.name} berhasil disalin` : `Salin password akun demo (${user.name})`}
                       >
                         {copiedKey === `${user.id}-password` ? (
                           <Check className="w-3.5 h-3.5 text-emerald-500" />
@@ -205,7 +205,7 @@ export const DemoAccountsModal: React.FC<DemoAccountsModalProps> = ({ isOpen, on
                         onClick={() => handleCopy(user.pin, 'PIN Transaksi', `${user.id}-pin`)}
                         className="p-1 sm:p-1.5 rounded-md hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 transition-colors shrink-0 cursor-pointer"
                         title="Salin PIN Transaksi"
-                        aria-label={`Salin PIN ${user.name}`}
+                        aria-label={copiedKey === `${user.id}-pin` ? `PIN ${user.name} berhasil disalin` : `Salin PIN transaksi akun demo (${user.name})`}
                       >
                         {copiedKey === `${user.id}-pin` ? (
                           <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />

@@ -3,14 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { usePOS } from '../hooks/usePOS';
 import { formatRupiah, formatDate, formatDateTime } from '../utils/formatters';
 import { orderService } from '../services/orderService';
+import { refundService } from '../services/refundService';
 import { Order } from '../types';
 import { calculateShiftFinancials, formatShiftDuration } from '../utils/shiftCalculation';
 import { getOrderTotalHPP, isLegacyEstimatedOrder, getOrderHPPCategory } from '../utils/reportUtils';
 import {
   TrendingUp, DollarSign, ShoppingBag, AlertTriangle, AlertCircle, Award,
   Calendar, ArrowUpRight, Coffee, Clock, Tag, X,
-  Receipt, PieChart, DoorOpen, Lock, CheckCircle2,
-  ChevronLeft, ChevronRight, Package, Wallet, Info
+  Receipt, PieChart, DoorOpen, Lock,
+  Package, Info, ShieldCheck, Banknote, QrCode
 } from 'lucide-react';
 
 export type AnalyticsPeriod = 'today' | 'week' | 'month' | 'year';
@@ -101,6 +102,27 @@ export const DashboardPage: React.FC = () => {
   const [yearlyOrders, setYearlyOrders] = useState<Order[]>([]);
   const [isDiscountModalOpen, setIsDiscountModalOpen] = useState<boolean>(false);
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [activeBarIndex, setActiveBarIndex] = useState<number | null>(null);
+  const [pendingRefundCount, setPendingRefundCount] = useState<number>(0);
+
+  // Clear selections when analytics period changes
+  useEffect(() => {
+    setActiveBarIndex(null);
+    setSelectedCategory(null);
+  }, [analyticsPeriod]);
+
+  useEffect(() => {
+    if (isOwner) {
+      refundService
+        .getRefundRequests()
+        .then(reqs => {
+          const pending = reqs.filter(r => r.approval_status === 'pending');
+          setPendingRefundCount(pending.length);
+        })
+        .catch(() => setPendingRefundCount(0));
+    }
+  }, [isOwner, orders]);
 
   // Horizontal Metric Carousel state (0: Ringkasan Keuangan, 1: Rata-rata Transaksi)
   const [activeMetricSlide, setActiveMetricSlide] = useState<number>(0);
@@ -576,11 +598,13 @@ export const DashboardPage: React.FC = () => {
     return shifts.find(s => s.status === 'closed');
   }, [shifts]);
 
-  // Hovered Category Item for Donut Chart
-  const hoveredCategoryItem = useMemo(() => {
-    if (!hoveredCategory) return null;
-    return categorySalesData.find(c => c.id === hoveredCategory) || null;
-  }, [hoveredCategory, categorySalesData]);
+  // Active Category Item for Donut Chart (hover takes precedence on desktop, otherwise active tap selection)
+  const activeCategoryId = hoveredCategory || selectedCategory;
+
+  const activeCategoryItem = useMemo(() => {
+    if (!activeCategoryId) return null;
+    return categorySalesData.find(c => c.id === activeCategoryId) || null;
+  }, [activeCategoryId, categorySalesData]);
 
   // Donut SVG circumference math (Radius R=70 -> Circumference ~439.82)
   const donutRadius = 70;
@@ -632,7 +656,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* Metric Cards Grid (Primary Fast Operational KPIs) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isOwner ? 'lg:grid-cols-3 xl:grid-cols-5' : 'lg:grid-cols-4'} gap-4`}>
         {/* Omzet Hari Ini */}
         <div className="p-5 bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 shadow-sm space-y-2">
           <div className="flex justify-between items-center">
@@ -776,6 +800,52 @@ export const DashboardPage: React.FC = () => {
               : 'Semua bahan aman'}
           </p>
         </div>
+
+        {/* Pengajuan Refund (Khusus Owner) */}
+        {isOwner && (
+          <div
+            onClick={() => navigate('/transactions', { state: { openRefundQueue: true } })}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') navigate('/transactions', { state: { openRefundQueue: true } }); }}
+            className={`p-5 bg-white dark:bg-[#1E1C1A] rounded-3xl border shadow-sm space-y-2 cursor-pointer hover:shadow-md transition-all duration-200 group ${
+              pendingRefundCount > 0
+                ? 'border-amber-300 dark:border-amber-800/80 hover:border-amber-500'
+                : 'border-stone-200 dark:border-stone-800 hover:border-[#C68B59]'
+            }`}
+            title="Klik untuk membuka antrean persetujuan refund"
+          >
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-stone-500 uppercase flex items-center gap-1.5">
+                Pengajuan Refund
+                <span className="text-[10px] text-[#C68B59] font-black group-hover:scale-110 transition-transform">
+                  Antrean
+                </span>
+              </span>
+
+              <div
+                className={`p-2 rounded-xl transition-transform group-hover:scale-110 ${
+                  pendingRefundCount > 0
+                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    : 'bg-stone-100 dark:bg-stone-800 text-stone-400'
+                }`}
+              >
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+            </div>
+
+            <p className="text-2xl font-black text-stone-900 dark:text-stone-100 flex items-center gap-2">
+              <span>{pendingRefundCount}</span>
+              <span className="text-xs font-bold text-stone-500 uppercase">Menunggu</span>
+            </p>
+
+            <p className="text-[11px] text-stone-500 font-medium truncate">
+              {pendingRefundCount > 0
+                ? 'Perlu persetujuan Owner'
+                : 'Tidak ada pengajuan pending'}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* ======================================================== */}
@@ -1341,8 +1411,16 @@ export const DashboardPage: React.FC = () => {
               </div>
 
               {/* Dynamic Bar Chart Visual */}
-              <div className="pt-2 h-64 flex items-end justify-between gap-1 sm:gap-2 px-1 overflow-hidden">
+              <div
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) {
+                    setActiveBarIndex(null);
+                  }
+                }}
+                className="pt-6 h-64 flex items-end justify-between gap-1 sm:gap-2 px-1 relative select-none"
+              >
                 {chartData.map((item, idx) => {
+                  const isSelected = activeBarIndex === idx;
                   const heightPct =
                     item.revenue > 0
                       ? Math.max(
@@ -1363,26 +1441,62 @@ export const DashboardPage: React.FC = () => {
                   return (
                     <div
                       key={`${item.label}-${idx}`}
-                      className="flex-1 min-w-0 flex flex-col items-center gap-2 group h-full justify-end"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveBarIndex(prev => prev === idx ? null : idx);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${item.label}: ${formatRupiah(item.revenue)}`}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setActiveBarIndex(prev => prev === idx ? null : idx);
+                        }
+                      }}
+                      className="flex-1 min-w-0 flex flex-col items-center gap-2 group h-full justify-end cursor-pointer relative"
                     >
                       <div className="relative w-full h-40 flex items-end justify-center">
-                        <span className="absolute -top-5 text-[9px] sm:text-[10px] font-bold text-[#C68B59] opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">
-                          {formatRupiah(item.revenue)}
-                        </span>
+                        {/* Tooltip: visible on desktop group-hover OR when activeBarIndex === idx */}
+                        <div
+                          className={`absolute -top-9 z-20 pointer-events-none transition-all duration-200 flex flex-col items-center ${
+                            isSelected
+                              ? 'opacity-100 scale-100'
+                              : 'opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100'
+                          }`}
+                        >
+                          <div className="px-2 py-1 rounded-lg bg-stone-900/95 dark:bg-stone-100/95 text-stone-100 dark:text-stone-900 shadow-md text-center whitespace-nowrap border border-stone-700/40 dark:border-stone-300/40 backdrop-blur-xs">
+                            <p className="text-[9px] font-medium leading-none text-stone-400 dark:text-stone-600 mb-0.5">
+                              {item.label}
+                            </p>
+                            <p className="text-[10px] sm:text-[11px] font-black text-[#D4A373] dark:text-[#8B5E3C] leading-none">
+                              {formatRupiah(item.revenue)}
+                            </p>
+                          </div>
+                          <div className="w-1.5 h-1.5 bg-stone-900/95 dark:bg-stone-100/95 rotate-45 -mt-0.5 border-r border-b border-stone-700/40 dark:border-stone-300/40" />
+                        </div>
 
-                        <div className="w-full h-full bg-stone-100 dark:bg-stone-800 rounded-xl overflow-hidden flex items-end p-0.5 sm:p-1">
+                        {/* Extended touch hitbox (min-w-[20px] max-w-[48px]) without modifying visual design */}
+                        <div className="w-full h-full min-w-[20px] max-w-[48px] bg-stone-100 dark:bg-stone-800 rounded-xl overflow-hidden flex items-end p-0.5 sm:p-1">
                           <div
                             style={{
                               height: `${heightPct}%`,
                             }}
-                            className="w-full bg-[#3B2A1F] dark:bg-[#D4A373] rounded-lg transition-all duration-500 group-hover:bg-[#C68B59]"
+                            className={`w-full rounded-lg transition-all duration-300 ${
+                              isSelected
+                                ? 'bg-[#C68B59] ring-2 ring-[#C68B59]/50 shadow-xs'
+                                : 'bg-[#3B2A1F] dark:bg-[#D4A373] group-hover:bg-[#C68B59]'
+                            }`}
                           />
                         </div>
                       </div>
 
                       <span
-                        className={`text-[9px] sm:text-[10px] font-bold text-stone-500 dark:text-stone-400 truncate max-w-full ${shouldShowLabel ? 'opacity-100' : 'opacity-0'
-                          }`}
+                        className={`text-[9px] sm:text-[10px] font-bold truncate max-w-full transition-colors ${
+                          isSelected
+                            ? 'text-[#C68B59] font-black'
+                            : 'text-stone-500 dark:text-stone-400'
+                        } ${shouldShowLabel || isSelected ? 'opacity-100' : 'opacity-0'}`}
                       >
                         {item.shortLabel}
                       </span>
@@ -1390,6 +1504,17 @@ export const DashboardPage: React.FC = () => {
                   );
                 })}
               </div>
+              {activeBarIndex !== null && (
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveBarIndex(null)}
+                    className="text-[11px] font-bold text-[#C68B59] hover:underline cursor-pointer"
+                  >
+                    Tutup Detail Periode
+                  </button>
+                </div>
+              )}
 
               {chartTotalRevenue === 0 && (
                 <div className="text-center text-xs text-stone-400">
@@ -1432,7 +1557,8 @@ export const DashboardPage: React.FC = () => {
                         fill="transparent"
                         stroke="currentColor"
                         strokeWidth="20"
-                        className="text-stone-100 dark:text-stone-800/80"
+                        className="text-stone-100 dark:text-stone-800/80 cursor-pointer"
+                        onClick={() => setSelectedCategory(null)}
                       />
 
                       {/* Dynamic Slices */}
@@ -1447,6 +1573,8 @@ export const DashboardPage: React.FC = () => {
                           accumulatedOffset += dashLength;
 
                           const isHovered = hoveredCategory === cat.id;
+                          const isSelected = selectedCategory === cat.id;
+                          const isActive = isHovered || isSelected;
 
                           return (
                             <circle
@@ -1456,14 +1584,19 @@ export const DashboardPage: React.FC = () => {
                               r={donutRadius}
                               fill="transparent"
                               stroke={color}
-                              strokeWidth={isHovered ? 26 : 20}
+                              strokeWidth={isActive ? 26 : 20}
                               strokeDasharray={`${dashLength} ${dashSpace}`}
                               strokeDashoffset={-currentOffset}
                               onMouseEnter={() => setHoveredCategory(cat.id)}
                               onMouseLeave={() => setHoveredCategory(null)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedCategory(prev => prev === cat.id ? null : cat.id);
+                              }}
                               className="transition-all duration-200 cursor-pointer"
                               style={{
-                                opacity: hoveredCategory && !isHovered ? 0.45 : 1,
+                                pointerEvents: 'stroke',
+                                opacity: (hoveredCategory || selectedCategory) && !isActive ? 0.45 : 1,
                               }}
                             />
                           );
@@ -1472,18 +1605,29 @@ export const DashboardPage: React.FC = () => {
                     </svg>
 
                     {/* Center Info Overlay */}
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-3 pointer-events-none">
-                      {hoveredCategoryItem ? (
+                    <div
+                      onClick={() => selectedCategory && setSelectedCategory(null)}
+                      className={`absolute inset-0 flex flex-col items-center justify-center text-center p-3 select-none transition-all ${
+                        selectedCategory ? 'cursor-pointer' : 'pointer-events-none'
+                      }`}
+                      title={selectedCategory ? 'Ketuk untuk kembali ke total bersih' : undefined}
+                    >
+                      {activeCategoryItem ? (
                         <>
                           <p className="text-[10px] font-black text-stone-500 uppercase tracking-wider truncate max-w-[120px]">
-                            {hoveredCategoryItem.name}
+                            {activeCategoryItem.name}
                           </p>
                           <p className="text-sm font-black text-[#C68B59] mt-0.5">
-                            {formatRupiah(hoveredCategoryItem.sales)}
+                            {formatRupiah(activeCategoryItem.sales)}
                           </p>
                           <span className="text-[10px] font-extrabold text-stone-700 dark:text-stone-300">
-                            {hoveredCategoryItem.percentage}% Omzet
+                            {activeCategoryItem.percentage}% Omzet
                           </span>
+                          {selectedCategory && (
+                            <span className="text-[9px] font-bold text-stone-400 dark:text-stone-500 mt-0.5 underline">
+                              Tutup
+                            </span>
+                          )}
                         </>
                       ) : (
                         <>
@@ -1506,22 +1650,37 @@ export const DashboardPage: React.FC = () => {
                     {categorySalesData.map((cat, idx) => {
                       const color = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
                       const isHovered = hoveredCategory === cat.id;
+                      const isSelected = selectedCategory === cat.id;
+                      const isActive = isHovered || isSelected;
+
                       return (
                         <div
                           key={cat.id}
+                          onClick={() => {
+                            setSelectedCategory(prev => prev === cat.id ? null : cat.id);
+                          }}
                           onMouseEnter={() => setHoveredCategory(cat.id)}
                           onMouseLeave={() => setHoveredCategory(null)}
-                          className={`flex items-center justify-between p-2 rounded-xl text-xs transition-colors cursor-pointer ${isHovered
-                            ? 'bg-stone-100 dark:bg-stone-800'
-                            : 'hover:bg-stone-50 dark:hover:bg-[#25221F]'
-                            }`}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedCategory(prev => prev === cat.id ? null : cat.id);
+                            }
+                          }}
+                          className={`flex items-center justify-between p-2 rounded-xl text-xs transition-colors cursor-pointer select-none ${
+                            isActive
+                              ? 'bg-stone-100 dark:bg-stone-800 ring-1 ring-[#C68B59]/40 shadow-xs'
+                              : 'hover:bg-stone-50 dark:hover:bg-[#25221F]'
+                          }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <span
                               className="w-3 h-3 rounded-full shrink-0 shadow-xs"
                               style={{ backgroundColor: color }}
                             />
-                            <span className="font-bold text-stone-800 dark:text-stone-200 truncate" title={cat.name}>
+                            <span className={`font-bold truncate ${isActive ? 'text-stone-900 dark:text-white' : 'text-stone-800 dark:text-stone-200'}`} title={cat.name}>
                               {cat.name}
                             </span>
                           </div>
@@ -1546,8 +1705,17 @@ export const DashboardPage: React.FC = () => {
                 </div>
               )}
 
-              <div className="text-[11px] text-stone-400 text-center pt-2 border-t border-stone-100 dark:border-stone-800">
-                Arahkan kursor pada grafik untuk melihat rincian kategori.
+              <div className="text-[11px] text-stone-400 text-center pt-2 border-t border-stone-100 dark:border-stone-800 flex items-center justify-center gap-2">
+                <span>Arahkan kursor atau ketuk grafik / legenda untuk melihat rincian kategori.</span>
+                {selectedCategory && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory(null)}
+                    className="text-[#C68B59] font-bold hover:underline cursor-pointer"
+                  >
+                    (Reset)
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1629,14 +1797,20 @@ export const DashboardPage: React.FC = () => {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 pt-2 border-t border-stone-200/60 dark:border-stone-800 text-[11px]">
-                      <div className="flex justify-between">
-                        <span className="text-stone-400">💵 Tunai:</span>
+                      <div className="flex justify-between items-center">
+                        <span className="text-stone-400 flex items-center gap-1">
+                          <Banknote className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                          Tunai:
+                        </span>
                         <span className="font-bold text-stone-800 dark:text-stone-200">
                           {formatRupiah(activeFinancials.cash_sales)}
                         </span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-stone-400">📱 QRIS:</span>
+                      <div className="flex justify-between items-center">
+                        <span className="text-stone-400 flex items-center gap-1">
+                          <QrCode className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                          QRIS:
+                        </span>
                         <span className="font-bold text-stone-800 dark:text-stone-200">
                           {formatRupiah(activeFinancials.qris_sales)}
                         </span>

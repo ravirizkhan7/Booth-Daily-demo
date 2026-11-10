@@ -139,12 +139,20 @@ export interface OrderItem {
 
 export type PaymentMethod = 'cash' | 'qris';
 
+export type DiscountScope = 'general' | 'vip';
+
+export type PromotionValidityType = 'unlimited' | 'time_limited';
+
 export interface DiscountRule {
   id: number | string;
   name: string;
   discount_percentage: number;
   minimum_purchase: number;
   is_active: boolean;
+  scope?: DiscountScope;
+  validity_type?: PromotionValidityType;
+  start_date?: string | null;
+  end_date?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -159,6 +167,38 @@ export interface Payment {
 }
 
 export type OrderType = 'dine_in' | 'take_away';
+
+export type RefundApprovalStatus = 'pending' | 'approved' | 'rejected';
+export type RefundDisbursementStatus = 'not_disbursed' | 'disbursed';
+export type RefundType = 'normal' | 'emergency';
+
+export interface RefundRequest {
+  id: string;
+  order_id: string;
+  order_number: string;
+  refund_type: RefundType;
+  original_payment_method: PaymentMethod;
+  refund_payment_method: PaymentMethod;
+  amount: number;
+  approval_status: RefundApprovalStatus;
+  approved_by_user_id?: string;
+  approved_by_name?: string;
+  approved_at?: string;
+  rejection_reason?: string;
+  disbursement_status: RefundDisbursementStatus;
+  disbursed_at?: string;
+  disbursed_by_user_id?: string;
+  disbursed_by_name?: string;
+  disbursed_shift_id?: string;
+  reason: string;
+  notes?: string;
+  evidence_image_url: string;
+  requested_by_user_id: string;
+  requested_by_name: string;
+  requested_shift_id: string;
+  created_at: string;
+  updated_at: string;
+}
 
 export type ShiftStatus = 'open' | 'closed';
 
@@ -240,6 +280,7 @@ export interface ShiftFinancialSnapshot {
   reconciliation_status: ShiftReconciliationStatus;
   cash_difference_reason?: string;
   qris_difference_reason?: string;
+  rejected_emergency_disbursements?: number;
   notes?: string;
 }
 
@@ -307,6 +348,8 @@ export interface Order {
   operational_date?: string;
   refund_shift_id?: string;
   refund_method?: PaymentMethod;
+  refund_pending?: boolean;
+  refund_request_id?: string;
 }
 
 export type ReceiptPaperSize = '58mm' | '80mm';
@@ -325,7 +368,17 @@ export interface Settings {
   receipt_paper_size?: ReceiptPaperSize;
   report_signer_name?: string;
   report_city?: string;
+  /**
+   * @deprecated LEGACY. Tidak lagi menjadi sumber perhitungan diskon transaksi baru.
+   * Dipertahankan hanya untuk membaca data/backup lama dan sebagai input migrasi satu kali
+   * ke `discountRules` (promo scope 'vip'). Lihat utils/legacyVipDiscountMigration.ts.
+   */
   vip_discount_percentage?: number;
+  /**
+   * Penanda persisten bahwa konfigurasi legacy `vip_discount_percentage` sudah ditangani
+   * (dimigrasikan atau sengaja diabaikan). Ikut tersimpan di backup/restore.
+   */
+  vip_discount_legacy_migrated?: boolean;
   vip_tax_percentage?: number | null;
   vip_room_service_charge_percentage?: number;
 }

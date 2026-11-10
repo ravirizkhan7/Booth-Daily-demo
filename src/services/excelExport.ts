@@ -365,7 +365,7 @@ function buildSalesSheet(rd: ReportData, storeName: string): XLSX.WorkSheet {
       const o = d.order;
       const a = i % 2 === 1;
       const isRefunded = o.payment?.status === 'refunded';
-      const isVip = Boolean(o.is_vip || o.order_area === 'vip');
+      const isVip = o.order_type === 'dine_in' && Boolean(o.is_vip || o.order_area === 'vip');
       const typeLabel = `${o.order_type === 'take_away' ? 'Takeaway' : 'Dine In'}${isVip ? ' (VIP)' : ''}`;
       push([
         cs(o.order_number, a ? S.tdAL : S.tdL),

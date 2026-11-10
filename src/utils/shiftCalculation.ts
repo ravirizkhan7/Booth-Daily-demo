@@ -1,4 +1,4 @@
-import { Order, Product, Recipe, Stock, Shift, ShiftFinancialSnapshot, ShiftExpense } from '../types';
+import { Order, Product, Recipe, Stock, Shift, ShiftFinancialSnapshot, ShiftExpense, RefundRequest } from '../types';
 import { calculateItemUnitHPP, getOrderTotalHPP } from './reportUtils';
 
 /**
@@ -71,7 +71,8 @@ export function calculateShiftFinancials(
   recipes: Recipe[] = [],
   stocks: Stock[] = [],
   actuals?: CalculateShiftInputActuals,
-  shiftExpenses?: ShiftExpense[]
+  shiftExpenses?: ShiftExpense[],
+  refundRequests?: RefundRequest[]
 ): ShiftFinancialSnapshot {
   // 1. Transaksi yang dibuat pada shift ini
   const shiftOrders = allOrders.filter(o => o.shift_id === shift.id);
@@ -109,22 +110,63 @@ export function calculateShiftFinancials(
     }
   });
 
-  // Pemecahan Refund
+  // Pemecahan Refund & Penyerahan Uang Kas/Non-Tunai
   let cash_refunds = 0;
   let qris_refunds = 0;
+  let rejected_emergency_disbursements = 0;
 
-  shiftRefundOrders.forEach(o => {
-    const refundMethod = String(o.refund_method || o.payment?.method || '').toLowerCase();
-    const amount = Number(o.total_amount) || 0;
-    if (refundMethod === 'cash') {
-      cash_refunds += amount;
-    } else if (refundMethod === 'qris') {
-      qris_refunds += amount;
-    } else {
-      // Default ke cash jika tidak ada metode eksplisit karena kasir laci F&B
-      cash_refunds += amount;
-    }
-  });
+  if (refundRequests && Array.isArray(refundRequests)) {
+    // 1. Ambil seluruh penyerahan dana (disbursement) yang terjadi pada shift ini
+    const shiftDisbursements = refundRequests.filter(
+      r => r.disbursement_status === 'disbursed' && r.disbursed_shift_id === shift.id
+    );
+
+    shiftDisbursements.forEach(r => {
+      const method = String(r.refund_payment_method || '').toLowerCase();
+      const amount = Number(r.amount) || 0;
+      if (method === 'cash') {
+        cash_refunds += amount;
+      } else if (method === 'qris') {
+        qris_refunds += amount;
+      } else {
+        cash_refunds += amount;
+      }
+
+      // Catat pengeluaran darurat yang ditolak untuk kebutuhan investigasi/rekonsiliasi
+      if (r.refund_type === 'emergency' && r.approval_status === 'rejected') {
+        rejected_emergency_disbursements += amount;
+      }
+    });
+
+    // 2. Ambil refund pesanan legacy (pesanan berstatus refunded tetapi tidak memiliki record di RefundRequest)
+    const requestOrderIds = new Set(refundRequests.map(r => String(r.order_id)));
+    const legacyRefundOrders = shiftRefundOrders.filter(o => !requestOrderIds.has(String(o.id)));
+
+    legacyRefundOrders.forEach(o => {
+      const refundMethod = String(o.refund_method || o.payment?.method || '').toLowerCase();
+      const amount = Number(o.total_amount) || 0;
+      if (refundMethod === 'cash') {
+        cash_refunds += amount;
+      } else if (refundMethod === 'qris') {
+        qris_refunds += amount;
+      } else {
+        cash_refunds += amount;
+      }
+    });
+  } else {
+    // Fallback pesanan legacy murni jika refundRequests tidak dilewatkan
+    shiftRefundOrders.forEach(o => {
+      const refundMethod = String(o.refund_method || o.payment?.method || '').toLowerCase();
+      const amount = Number(o.total_amount) || 0;
+      if (refundMethod === 'cash') {
+        cash_refunds += amount;
+      } else if (refundMethod === 'qris') {
+        qris_refunds += amount;
+      } else {
+        cash_refunds += amount;
+      }
+    });
+  }
 
   // Perhitungan HPP (mencakup seluruh item pada pesanan yang dibuat shift ini, termasuk yang direfund karena bahan fisik terpakai)
   let estimated_hpp = 0;
@@ -265,8 +307,61 @@ export function calculateShiftFinancials(
     reconciliation_status,
     cash_difference_reason,
     qris_difference_reason,
+    rejected_emergency_disbursements,
     notes: actuals?.notes || shift.notes,
   };
+}
+
+/**
+ * Menghitung saldo kas laci fisik yang tersedia saat ini pada suatu shift.
+ * Kas tidak boleh negatif sebagai dana yang dapat ditarik.
+ */
+export function calculateShiftAvailableCash(
+  shift: Shift,
+  allOrders: Order[],
+  shiftExpenses: ShiftExpense[] = [],
+  refundRequests: RefundRequest[] = []
+): number {
+  const shiftOrders = allOrders.filter(o => o.shift_id === shift.id);
+  const cashInitial = Number(shift.cash_initial) || 0;
+
+  const cashSales = shiftOrders
+    .filter(o => String(o.payment?.method || '').toLowerCase() === 'cash')
+    .reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+
+  const cashExpenses = shiftExpenses
+    .filter(e => e.shift_id === shift.id && e.status === 'active')
+    .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+  // Penyerahan kas dari refund request pada shift ini
+  const shiftDisbursements = refundRequests.filter(
+    r =>
+      r.disbursement_status === 'disbursed' &&
+      r.disbursed_shift_id === shift.id &&
+      String(r.refund_payment_method || '').toLowerCase() === 'cash'
+  );
+  const cashRefundsFromRequests = shiftDisbursements.reduce(
+    (sum, r) => sum + (Number(r.amount) || 0),
+    0
+  );
+
+  // Penyerahan kas pesanan legacy (jika ada pesanan lama yang direfund di shift ini)
+  const requestOrderIds = new Set(refundRequests.map(r => String(r.order_id)));
+  const legacyCashRefunds = allOrders
+    .filter(o => {
+      if (requestOrderIds.has(String(o.id))) return false;
+      const isRefunded = o.payment?.status === 'refunded';
+      const isShift = o.refund_shift_id
+        ? o.refund_shift_id === shift.id
+        : o.shift_id === shift.id && isRefunded;
+      const isCash = String(o.refund_method || o.payment?.method || 'cash').toLowerCase() === 'cash';
+      return isShift && isCash;
+    })
+    .reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+
+  const totalCashRefunds = cashRefundsFromRequests + legacyCashRefunds;
+  const available = cashInitial + cashSales - totalCashRefunds - cashExpenses;
+  return Math.max(0, available);
 }
 
 export interface ShiftQrisDisplayInfo {

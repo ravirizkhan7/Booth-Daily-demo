@@ -11,6 +11,10 @@ export const discountRepository = {
     minimum_purchase: number;
     discount_percentage: number;
     is_active?: boolean;
+    scope?: 'general' | 'vip';
+    validity_type?: 'unlimited' | 'time_limited';
+    start_date?: string | null;
+    end_date?: string | null;
   }): Promise<DiscountRule> {
     return mockStore.addDiscountRule(payload);
   },
@@ -22,6 +26,10 @@ export const discountRepository = {
       minimum_purchase?: number;
       discount_percentage?: number;
       is_active?: boolean;
+      scope?: 'general' | 'vip';
+      validity_type?: 'unlimited' | 'time_limited';
+      start_date?: string | null;
+      end_date?: string | null;
     }
   ): Promise<DiscountRule> {
     return mockStore.updateDiscountRule(id, payload);

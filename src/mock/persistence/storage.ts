@@ -295,6 +295,13 @@ export function loadPersistedSnapshot(): StorageLoadResult {
         missingFields.push(`expenses_invalid: ${expenseValidation.error}`);
       }
     }
+
+    // Normalisasi & Validasi refundRequests (Refund Workflow)
+    if (typeof parsed.refundRequests === 'undefined') {
+      parsed.refundRequests = [];
+    } else if (!Array.isArray(parsed.refundRequests)) {
+      missingFields.push('refundRequests');
+    }
   }
 
   if (missingFields.length > 0) {
@@ -431,6 +438,7 @@ export const APP_ALLOWLIST_STORAGE_KEYS = [
   'boothdaily_cached_products',
   'boothdaily_cached_categories',
   'boothdaily_cached_stocks',
+  'boothdaily_watermark_state',
 ] as const;
 
 /**

@@ -1,5 +1,8 @@
-import { Order, OrderItem, OrderHPPSource, Purchase, Product, Recipe, Stock, Settings } from '../types';
+import { Order, OrderItem, OrderHPPSource, Purchase, Product, Recipe, Stock, Settings, Shift } from '../types';
 import { calculateGrossAmount, convertUnitQuantity, roundToRupiah } from './hppCalculation';
+import { getOperationalDate } from './shiftCalculation';
+
+export { getOperationalDate };
 
 export type DateFilterType = 'today' | 'week' | 'month' | 'custom';
 
@@ -28,6 +31,9 @@ export interface ReportData {
   periodLabel: string;
   startDateStr: string;
   endDateStr: string;
+  startOperationalDate?: string;
+  endOperationalDate?: string;
+  cutoffTime?: string;
   filterType: DateFilterType;
   filterUserId?: string;
   filterUserName?: string;
@@ -113,81 +119,284 @@ export interface ReportTransactionDetailItem {
   orderArea: 'regular' | 'vip';
 }
 
+export type ShiftLookup =
+  | Shift[]
+  | Map<string, Shift>
+  | ((shiftId: string) => Shift | undefined);
+
 /**
- * Menghitung rentang tanggal dan label human-readable berdasarkan filter
+ * Mengambil tanggal operasional (YYYY-MM-DD) untuk sebuah order:
+ * Prioritas 1: Jika `order.operational_date` sudah ada dan valid (YYYY-MM-DD), gunakan langsung.
+ * Prioritas 2: Jika tidak tersedia, tetapi `order.shift_id` cocok dengan shift yang memiliki `operational_date` valid, gunakan tanggal operasional shift tersebut.
+ * Prioritas 3: Fallback ke perhitungan `order.created_at` menggunakan jam cutoff operasional toko.
+ */
+export function getOrderOperationalDate(
+  order: { operational_date?: string; created_at: string; shift_id?: string },
+  cutoffTime: string = '04:00',
+  shifts?: ShiftLookup
+): string {
+  // Prioritas 1: operational_date milik order jika valid YYYY-MM-DD
+  if (order.operational_date && /^\d{4}-\d{2}-\d{2}$/.test(order.operational_date)) {
+    return order.operational_date;
+  }
+
+  // Prioritas 2: Tanggal operasional dari shift yang menaunginya jika valid YYYY-MM-DD
+  if (order.shift_id && shifts) {
+    let matchedShift: Shift | undefined;
+    if (shifts instanceof Map) {
+      matchedShift = shifts.get(order.shift_id);
+    } else if (Array.isArray(shifts)) {
+      matchedShift = shifts.find(s => s && s.id === order.shift_id);
+    } else if (typeof shifts === 'function') {
+      try {
+        matchedShift = shifts(order.shift_id);
+      } catch {
+        matchedShift = undefined;
+      }
+    }
+
+    if (
+      matchedShift &&
+      matchedShift.operational_date &&
+      /^\d{4}-\d{2}-\d{2}$/.test(matchedShift.operational_date)
+    ) {
+      return matchedShift.operational_date;
+    }
+  }
+
+  // Prioritas 3: Fallback jam cutoff operasional dari created_at
+  const dateObj = new Date(order.created_at);
+  if (!isNaN(dateObj.getTime())) {
+    return getOperationalDate(dateObj, cutoffTime);
+  }
+  return String(order.created_at || '').slice(0, 10);
+}
+
+/**
+ * Mengambil tanggal operasional (YYYY-MM-DD) untuk refund sebuah order:
+ * 1. Prioritas: jika order memiliki `refund_operational_date`, gunakan langsung.
+ * 2. Jika ada `refunded_at`, hitung tanggal operasionalnya berdasarkan jam cutoff.
+ * 3. Fallback: gunakan tanggal operasional pesanan aslinya (dengan resolusi shift lookup).
+ */
+export function getRefundOperationalDate(
+  order: Order,
+  cutoffTime: string = '04:00',
+  shifts?: ShiftLookup
+): string {
+  if ((order as any).refund_operational_date && /^\d{4}-\d{2}-\d{2}$/.test((order as any).refund_operational_date)) {
+    return (order as any).refund_operational_date;
+  }
+  // Jika refund terkait ke shift refund tertentu
+  if ((order as any).refund_shift_id && shifts) {
+    let matchedShift: Shift | undefined;
+    if (shifts instanceof Map) {
+      matchedShift = shifts.get((order as any).refund_shift_id);
+    } else if (Array.isArray(shifts)) {
+      matchedShift = shifts.find(s => s && s.id === (order as any).refund_shift_id);
+    } else if (typeof shifts === 'function') {
+      try {
+        matchedShift = shifts((order as any).refund_shift_id);
+      } catch {
+        matchedShift = undefined;
+      }
+    }
+
+    if (
+      matchedShift &&
+      matchedShift.operational_date &&
+      /^\d{4}-\d{2}-\d{2}$/.test(matchedShift.operational_date)
+    ) {
+      return matchedShift.operational_date;
+    }
+  }
+  if (order.refunded_at) {
+    const d = new Date(order.refunded_at);
+    if (!isNaN(d.getTime())) {
+      return getOperationalDate(d, cutoffTime);
+    }
+  }
+  return getOrderOperationalDate(order, cutoffTime, shifts);
+}
+
+/**
+ * Mengambil tanggal operasional (YYYY-MM-DD) untuk pembelian/purchase:
+ * 1. Prioritas: `purchase.date` jika sudah berformat YYYY-MM-DD.
+ * 2. Fallback: hitung dari `purchase.created_at` menggunakan jam cutoff.
+ */
+export function getPurchaseOperationalDate(
+  purchase: { date?: string; created_at?: string },
+  cutoffTime: string = '04:00'
+): string {
+  if (purchase.date && /^\d{4}-\d{2}-\d{2}$/.test(purchase.date)) {
+    return purchase.date;
+  }
+  if (purchase.created_at) {
+    const d = new Date(purchase.created_at);
+    if (!isNaN(d.getTime())) {
+      return getOperationalDate(d, cutoffTime);
+    }
+  }
+  return String(purchase.date || purchase.created_at || '').slice(0, 10);
+}
+
+/**
+ * Menghitung rentang tanggal operasional dan label human-readable berdasarkan filter.
+ * Menggunakan tanggal operasional toko (operational_day_cutoff_time) sebagai standar periode.
  */
 export function getPeriodRange(
   filterType: DateFilterType,
   customStartStr?: string,
-  customEndStr?: string
-): { start: Date; end: Date; label: string; startFormatted: string; endFormatted: string } {
-  const now = new Date();
+  customEndStr?: string,
+  cutoffTime: string = '04:00',
+  referenceDate: Date = new Date()
+): {
+  start: Date;
+  end: Date;
+  label: string;
+  startFormatted: string;
+  endFormatted: string;
+  startOperationalDate: string;
+  endOperationalDate: string;
+} {
+  const effectiveCutoff = cutoffTime || '04:00';
+  const [cutoffHours, cutoffMinutes] = effectiveCutoff.split(':').map(Number);
+  const currentOpDate = getOperationalDate(referenceDate, effectiveCutoff);
+
+  let startOperationalDate: string;
+  let endOperationalDate: string;
+  let start: Date;
+  let end: Date;
+  let label: string;
+  let startFormatted: string;
+  let endFormatted: string;
 
   if (filterType === 'today') {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    startOperationalDate = currentOpDate;
+    endOperationalDate = currentOpDate;
+
+    const [y, m, d] = currentOpDate.split('-').map(Number);
+    const dateObj = new Date(y, m - 1, d);
     const dateFormatted = new Intl.DateTimeFormat('id-ID', {
       day: 'numeric',
       month: 'long',
       year: 'numeric'
-    }).format(now);
+    }).format(dateObj);
+
+    start = new Date(y, m - 1, d, cutoffHours, cutoffMinutes, 0, 0);
+    end = new Date(y, m - 1, d + 1, cutoffHours, cutoffMinutes, 0, -1);
+    label = `Hari Ini (${dateFormatted})`;
+    startFormatted = dateFormatted;
+    endFormatted = dateFormatted;
 
     return {
       start,
       end,
-      label: `Hari Ini (${dateFormatted})`,
-      startFormatted: dateFormatted,
-      endFormatted: dateFormatted
+      label,
+      startFormatted,
+      endFormatted,
+      startOperationalDate,
+      endOperationalDate,
     };
   }
 
   if (filterType === 'week') {
-    const start = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    endOperationalDate = currentOpDate;
 
-    const startFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(start);
-    const endFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(end);
+    const [y, m, d] = currentOpDate.split('-').map(Number);
+    const startDateObj = new Date(y, m - 1, d - 6);
+    const sy = startDateObj.getFullYear();
+    const sm = String(startDateObj.getMonth() + 1).padStart(2, '0');
+    const sd = String(startDateObj.getDate()).padStart(2, '0');
+    startOperationalDate = `${sy}-${sm}-${sd}`;
+
+    start = new Date(startDateObj.getFullYear(), startDateObj.getMonth(), startDateObj.getDate(), cutoffHours, cutoffMinutes, 0, 0);
+    end = new Date(y, m - 1, d + 1, cutoffHours, cutoffMinutes, 0, -1);
+
+    const startFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(startDateObj);
+    const endFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(y, m - 1, d));
+
+    label = `7 Hari Terakhir (${startFmt} - ${endFmt})`;
+    startFormatted = startFmt;
+    endFormatted = endFmt;
 
     return {
       start,
       end,
-      label: `7 Hari Terakhir (${startFmt} - ${endFmt})`,
-      startFormatted: startFmt,
-      endFormatted: endFmt
+      label,
+      startFormatted,
+      endFormatted,
+      startOperationalDate,
+      endOperationalDate,
     };
   }
 
   if (filterType === 'month') {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    const [y, m] = currentOpDate.split('-').map(Number);
+    startOperationalDate = `${y}-${String(m).padStart(2, '0')}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    endOperationalDate = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-    const monthFmt = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(now);
-    const startFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(start);
-    const endFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(end);
+    start = new Date(y, m - 1, 1, cutoffHours, cutoffMinutes, 0, 0);
+    end = new Date(y, m, 1, cutoffHours, cutoffMinutes, 0, -1);
+
+    const monthFmt = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(new Date(y, m - 1, 1));
+    const startFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(y, m - 1, 1));
+    const endFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(y, m - 1, lastDay));
+
+    label = `Bulan Ini (${monthFmt})`;
+    startFormatted = startFmt;
+    endFormatted = endFmt;
 
     return {
       start,
       end,
-      label: `Bulan Ini (${monthFmt})`,
-      startFormatted: startFmt,
-      endFormatted: endFmt
+      label,
+      startFormatted,
+      endFormatted,
+      startOperationalDate,
+      endOperationalDate,
     };
   }
 
   // Custom Range
-  const startD = customStartStr ? new Date(`${customStartStr}T00:00:00`) : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const endD = customEndStr ? new Date(`${customEndStr}T23:59:59.999`) : new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  const [cy, cm] = currentOpDate.split('-').map(Number);
+  let sStr = customStartStr && /^\d{4}-\d{2}-\d{2}$/.test(customStartStr)
+    ? customStartStr
+    : `${cy}-${String(cm).padStart(2, '0')}-01`;
+  let eStr = customEndStr && /^\d{4}-\d{2}-\d{2}$/.test(customEndStr)
+    ? customEndStr
+    : currentOpDate;
 
-  const startFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(startD);
-  const endFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(endD);
+  if (sStr > eStr) {
+    const tmp = sStr;
+    sStr = eStr;
+    eStr = tmp;
+  }
+
+  startOperationalDate = sStr;
+  endOperationalDate = eStr;
+
+  const [sy, sm, sd] = startOperationalDate.split('-').map(Number);
+  const [ey, em, ed] = endOperationalDate.split('-').map(Number);
+
+  start = new Date(sy, sm - 1, sd, cutoffHours, cutoffMinutes, 0, 0);
+  end = new Date(ey, em - 1, ed + 1, cutoffHours, cutoffMinutes, 0, -1);
+
+  const startFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(sy, sm - 1, sd));
+  const endFmt = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(ey, em - 1, ed));
+
+  label = `Periode Kustom (${startFmt} s/d ${endFmt})`;
+  startFormatted = startFmt;
+  endFormatted = endFmt;
 
   return {
-    start: startD,
-    end: endD,
-    label: `Periode Kustom (${startFmt} s/d ${endFmt})`,
-    startFormatted: startFmt,
-    endFormatted: endFmt
+    start,
+    end,
+    label,
+    startFormatted,
+    endFormatted,
+    startOperationalDate,
+    endOperationalDate,
   };
 }
 
@@ -424,7 +633,7 @@ export function getOrderFinancials(
   const discount = Number(order.discount) || 0;
   const tax = Number(order.tax) || 0;
   const serviceCharge = Number(order.service_charge) || 0;
-  const isVip = Boolean(order.is_vip || order.order_area === 'vip');
+  const isVip = order.order_type === 'dine_in' && Boolean(order.is_vip || order.order_area === 'vip');
   const orderArea: 'regular' | 'vip' = isVip ? 'vip' : 'regular';
 
   return {
@@ -499,7 +708,10 @@ export function computeReportData({
   userId = 'all',
   userName,
   userRole,
-  settings
+  settings,
+  cutoffTime,
+  referenceDate,
+  shifts
 }: {
   orders: Order[];
   purchases: Purchase[];
@@ -513,8 +725,28 @@ export function computeReportData({
   userName?: string;
   userRole?: string;
   settings?: Settings;
+  cutoffTime?: string;
+  referenceDate?: Date;
+  shifts?: Shift[];
 }): ReportData {
-  const { start, end, label, startFormatted, endFormatted } = getPeriodRange(dateFilter, startDate, endDate);
+  const effectiveCutoff = cutoffTime || settings?.operational_day_cutoff_time || '04:00';
+  const {
+    start,
+    end,
+    label,
+    startFormatted,
+    endFormatted,
+    startOperationalDate,
+    endOperationalDate
+  } = getPeriodRange(dateFilter, startDate, endDate, effectiveCutoff, referenceDate);
+
+  // Buat lookup Map shift untuk resolusi tanggal operasional O(1)
+  const shiftMap = new Map<string, Shift>();
+  if (Array.isArray(shifts)) {
+    shifts.forEach(s => {
+      if (s && s.id) shiftMap.set(s.id, s);
+    });
+  }
 
   // Helper filter kasir / pengguna berdasarkan created_by_user_id
   const matchesUser = (order: Order): boolean => {
@@ -525,22 +757,29 @@ export function computeReportData({
     return order.created_by_user_id === userId;
   };
 
-  // 1. Filter Orders berdasarkan created_at DAN filter pengguna
-  const periodAllOrders = orders.filter(o => isDateInRange(o.created_at, start, end) && matchesUser(o));
+  // 1. Filter Orders berdasarkan tanggal operasional DAN filter pengguna
+  const periodAllOrders = orders.filter(o => {
+    if (!matchesUser(o)) return false;
+    const opDate = getOrderOperationalDate(o, effectiveCutoff, shiftMap);
+    if (!opDate) return false;
+    return opDate >= startOperationalDate && opDate <= endOperationalDate;
+  });
   const filteredOrders = periodAllOrders.filter(o => o.payment?.status !== 'refunded');
 
-  // 2. Filter Purchases berdasarkan date atau created_at
-  const filteredPurchases = purchases.filter(p => isDateInRange(p.date || p.created_at, start, end));
+  // 2. Filter Purchases berdasarkan tanggal operasional pembelian
+  const filteredPurchases = purchases.filter(p => {
+    const pDate = getPurchaseOperationalDate(p, effectiveCutoff);
+    if (!pDate) return false;
+    return pDate >= startOperationalDate && pDate <= endOperationalDate;
+  });
 
-  // 3. Filter Pengembalian Dana (Refund) yang dieksekusi dalam periode ini DAN mencocokkan pengguna:
+  // 3. Filter Pengembalian Dana (Refund) yang dieksekusi dalam periode operasional ini DAN mencocokkan pengguna:
   const periodRefundOrders = orders.filter(o => {
     if (o.payment?.status !== 'refunded') return false;
     if (!matchesUser(o)) return false;
-    const hasValidRefundDate = Boolean(o.refunded_at && !isNaN(new Date(o.refunded_at).getTime()));
-    if (hasValidRefundDate) {
-      return isDateInRange(o.refunded_at, start, end);
-    }
-    return isDateInRange(o.created_at, start, end);
+    const refundOpDate = getRefundOperationalDate(o, effectiveCutoff, shiftMap);
+    if (!refundOpDate) return false;
+    return refundOpDate >= startOperationalDate && refundOpDate <= endOperationalDate;
   });
 
   let totalRefunds = 0;
@@ -751,6 +990,9 @@ export function computeReportData({
     periodLabel: label,
     startDateStr: startFormatted,
     endDateStr: endFormatted,
+    startOperationalDate,
+    endOperationalDate,
+    cutoffTime: effectiveCutoff,
     filterType: dateFilter,
     filterUserId: userId !== 'all' ? userId : undefined,
     filterUserName: userId !== 'all' ? (userName || (userId === 'unassigned' ? 'Tidak Diketahui / Sistem' : userId)) : undefined,

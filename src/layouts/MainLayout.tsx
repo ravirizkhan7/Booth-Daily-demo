@@ -10,6 +10,9 @@ import { LogoutConfirmModal } from '../components/common/LogoutConfirmModal';
 import { Toast } from '../components/common/Toast';
 import { OpenShiftModal } from '../components/pos/OpenShiftModal';
 import { CloseShiftModal } from '../components/pos/CloseShiftModal';
+import { ConversionNotification } from '../mock/watermark/ConversionNotification';
+import { ConversionModal } from '../mock/watermark/ConversionModal';
+import { PackageSelectionModal } from '../mock/watermark/PackageSelectionModal';
 import {
   ShoppingCart,
   LayoutDashboard,
@@ -111,6 +114,11 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       <OpenShiftModal />
       <CloseShiftModal />
       <Toast />
+
+      {/* Smart Demo Conversion Overlays */}
+      <ConversionNotification />
+      <ConversionModal />
+      <PackageSelectionModal />
     </div>
   );
 };

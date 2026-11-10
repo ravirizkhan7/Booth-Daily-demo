@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Upload,
@@ -9,10 +9,7 @@ import {
   AlertCircle,
   FileText,
   Store,
-  Users,
-  Package,
   Calendar,
-  Image,
   Loader2,
   ArrowRight,
 } from 'lucide-react';
@@ -41,6 +38,60 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // F-08 Focus Management & Escape Refs
+  const modalRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  // F-08 Focus Trap & SAFE_TO_CLOSE Escape Handling
+  useEffect(() => {
+    if (!isOpen) return;
+    triggerRef.current = document.activeElement as HTMLElement | null;
+
+    const timer = setTimeout(() => {
+      const focusTarget = modalRef.current?.querySelector<HTMLInputElement | HTMLButtonElement>(
+        'input:not([type="file"]):not([disabled]), button:not([aria-label*="Tutup"])'
+      );
+      focusTarget?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (!isProcessing) {
+          e.preventDefault();
+          handleClose();
+        }
+        return;
+      }
+
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (triggerRef.current && typeof triggerRef.current.focus === 'function') {
+        triggerRef.current.focus();
+      }
+    };
+  }, [isOpen, isProcessing, step]);
 
   if (!isOpen) return null;
 
@@ -137,15 +188,21 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white dark:bg-[#1E1C1A] w-full max-w-xl rounded-3xl border border-stone-200 dark:border-stone-800 shadow-2xl overflow-hidden text-xs">
+      <div 
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="restore-modal-title"
+        className="bg-white dark:bg-[#1E1C1A] w-full max-w-xl rounded-3xl border border-stone-200 dark:border-stone-800 shadow-2xl overflow-hidden text-xs"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
-              <Upload className="w-5 h-5" />
+              <Upload className="w-5 h-5" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-sm font-black text-stone-900 dark:text-stone-100">
+              <h2 id="restore-modal-title" className="text-sm font-black text-stone-900 dark:text-stone-100">
                 Pulihkan Data Toko (Restore)
               </h2>
               <span className="text-[10px] font-semibold text-stone-400">
@@ -157,9 +214,10 @@ export const RestoreModal: React.FC<RestoreModalProps> = ({
             type="button"
             onClick={handleClose}
             disabled={isProcessing}
-            className="p-1.5 rounded-xl hover:bg-stone-200 dark:hover:bg-stone-800 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 transition-colors"
+            className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl hover:bg-stone-200 dark:hover:bg-stone-800 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-rose-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Tutup modal pemulihan data"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 

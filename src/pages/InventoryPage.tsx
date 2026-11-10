@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { NumberInput } from '../components/common/NumberInput';
 import { usePOS } from '../hooks/usePOS';
 import { Stock, StockHistory } from '../types';
@@ -87,6 +87,182 @@ export const InventoryPage: React.FC = () => {
   const [formError, setFormError] = useState('');
   const [updateError, setUpdateError] = useState('');
 
+  // F-07 Double-Submit Prevention Locks
+  const updateStokLock = useRef(false);
+  const [isUpdatingStok, setIsUpdatingStok] = useState(false);
+  const stockLock = useRef(false);
+  const [isSavingStock, setIsSavingStock] = useState(false);
+  const deleteStockLock = useRef(false);
+  const [isDeletingStock, setIsDeletingStock] = useState(false);
+
+  // F-08 Accessibility & Focus Refs
+  const updateStokModalRef = useRef<HTMLDivElement>(null);
+  const updateStokTriggerRef = useRef<HTMLElement | null>(null);
+  const stockModalRef = useRef<HTMLDivElement>(null);
+  const stockTriggerRef = useRef<HTMLElement | null>(null);
+  const historyModalRef = useRef<HTMLDivElement>(null);
+  const historyTriggerRef = useRef<HTMLElement | null>(null);
+
+  // F-08 Update Stok Modal: Focus Trap & Escape (GUARDED_CONFIRM_REQUIRED)
+  useEffect(() => {
+    if (!isUpdateStokOpen) return;
+    updateStokTriggerRef.current = document.activeElement as HTMLElement | null;
+
+    const timer = setTimeout(() => {
+      const input = updateStokModalRef.current?.querySelector<HTMLInputElement | HTMLButtonElement>(
+        'input, button:not([aria-label*="Tutup"])'
+      );
+      input?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isUpdatingStok) return;
+        e.preventDefault();
+        const isDirty = updateAmount !== 100 || updateNotes.trim() !== '' || updateReason !== 'Hasil Stock Opname Fisik' || updateType !== 'add';
+        if (isDirty) {
+          if (window.confirm('Batalkan perubahan penyesuaian stok? Perubahan yang belum disimpan akan hilang.')) {
+            setIsUpdateStokOpen(false);
+          }
+        } else {
+          setIsUpdateStokOpen(false);
+        }
+        return;
+      }
+
+      if (e.key === 'Tab' && updateStokModalRef.current) {
+        const focusables = updateStokModalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (updateStokTriggerRef.current && typeof updateStokTriggerRef.current.focus === 'function') {
+        updateStokTriggerRef.current.focus();
+      }
+    };
+  }, [isUpdateStokOpen, isUpdatingStok, updateAmount, updateNotes, updateReason, updateType]);
+
+  // F-08 Master Stock Modal: Focus Trap & Escape (GUARDED_CONFIRM_REQUIRED)
+  useEffect(() => {
+    if (!isStockModalOpen) return;
+    stockTriggerRef.current = document.activeElement as HTMLElement | null;
+
+    const timer = setTimeout(() => {
+      const input = stockModalRef.current?.querySelector<HTMLInputElement>('input[type="text"]');
+      input?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isSavingStock) return;
+        e.preventDefault();
+        const isDirty = editingStock
+          ? (stockFormData.name !== editingStock.name ||
+             stockFormData.cost_per_unit !== editingStock.cost_per_unit ||
+             stockFormData.unit !== editingStock.unit ||
+             stockFormData.min_amount !== editingStock.min_amount ||
+             (stockFormData.current_amount !== editingStock.current_amount && editStockNotes.trim() !== ''))
+          : (stockFormData.name.trim() !== '' || stockFormData.cost_per_unit !== 150 || stockFormData.unit !== 'Gram');
+
+        if (isDirty) {
+          if (window.confirm('Batalkan pengisian data bahan baku? Perubahan yang belum disimpan akan hilang.')) {
+            setIsStockModalOpen(false);
+          }
+        } else {
+          setIsStockModalOpen(false);
+        }
+        return;
+      }
+
+      if (e.key === 'Tab' && stockModalRef.current) {
+        const focusables = stockModalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (stockTriggerRef.current && typeof stockTriggerRef.current.focus === 'function') {
+        stockTriggerRef.current.focus();
+      }
+    };
+  }, [isStockModalOpen, isSavingStock, stockFormData, editingStock, editStockNotes]);
+
+  // F-08 Detail History Modal: Focus Trap & Escape (SAFE_TO_CLOSE)
+  useEffect(() => {
+    if (!selectedHistory) return;
+    historyTriggerRef.current = document.activeElement as HTMLElement | null;
+
+    const timer = setTimeout(() => {
+      const closeBtn = historyModalRef.current?.querySelector<HTMLButtonElement>('button');
+      closeBtn?.focus();
+    }, 50);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSelectedHistory(null);
+        return;
+      }
+
+      if (e.key === 'Tab' && historyModalRef.current) {
+        const focusables = historyModalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (historyTriggerRef.current && typeof historyTriggerRef.current.focus === 'function') {
+        historyTriggerRef.current.focus();
+      }
+    };
+  }, [selectedHistory]);
+
   // Calculate Summary Cards metrics
   const totalBahan = stocks.length;
   const stokAmanCount = stocks.filter(s => s.current_amount > s.min_amount).length;
@@ -170,6 +346,8 @@ export const InventoryPage: React.FC = () => {
   // Handle Save Master Stock
   const handleSaveStock = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (stockLock.current) return;
+
     if (!stockFormData.name.trim()) {
       setFormError('Nama bahan baku wajib diisi');
       return;
@@ -203,6 +381,8 @@ export const InventoryPage: React.FC = () => {
       return;
     }
 
+    stockLock.current = true;
+    setIsSavingStock(true);
     try {
       let baselineToSubmit: number | undefined = undefined;
       if (isOwner) {
@@ -237,14 +417,26 @@ export const InventoryPage: React.FC = () => {
     } catch (err: any) {
       console.error('Save stock error:', err);
       setFormError(err?.response?.data?.message || err?.message || 'Gagal menyimpan data bahan baku');
+    } finally {
+      stockLock.current = false;
+      setIsSavingStock(false);
     }
   };
 
   // Delete Confirm
   const handleDeleteStockConfirm = async () => {
-    if (!deletingStock) return;
-    await removeStockItem(deletingStock.id);
-    setDeletingStock(null);
+    if (!deletingStock || deleteStockLock.current) return;
+    deleteStockLock.current = true;
+    setIsDeletingStock(true);
+    try {
+      await removeStockItem(deletingStock.id);
+      setDeletingStock(null);
+    } catch (err) {
+      console.error('Delete stock error:', err);
+    } finally {
+      deleteStockLock.current = false;
+      setIsDeletingStock(false);
+    }
   };
 
   // Open Update Stok Modal
@@ -261,7 +453,7 @@ export const InventoryPage: React.FC = () => {
   // Save Update Stok
   const handleSaveUpdateStok = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedStockForUpdate) return;
+    if (!selectedStockForUpdate || updateStokLock.current) return;
 
     if (updateAmount <= 0) {
       setUpdateError('Jumlah perubahan harus lebih besar dari 0');
@@ -286,6 +478,8 @@ export const InventoryPage: React.FC = () => {
       return;
     }
 
+    updateStokLock.current = true;
+    setIsUpdatingStok(true);
     try {
       await adjustStockQuantity(selectedStockForUpdate.id, change, updateReason, updateNotes.trim());
       setIsUpdateStokOpen(false);
@@ -297,6 +491,9 @@ export const InventoryPage: React.FC = () => {
     } catch (err: any) {
       console.error('Update stock error:', err);
       setUpdateError(err?.response?.data?.message || err?.message || 'Gagal memperbarui stok.');
+    } finally {
+      updateStokLock.current = false;
+      setIsUpdatingStok(false);
     }
   };
 
@@ -451,22 +648,25 @@ export const InventoryPage: React.FC = () => {
 
             {/* Filter Buttons */}
             <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto shrink-0 pb-1 md:pb-0">
-              {[
-                { id: 'ALL', label: 'Semua' },
-                { id: 'AMAN', label: '🟢 Aman' },
-                { id: 'MENIPIS', label: '🟡 Menipis' },
-                { id: 'HABIS', label: '🔴 Habis' }
-              ].map(f => (
+              {([
+                { id: 'ALL', label: 'Semua', dotClass: null },
+                { id: 'AMAN', label: 'Aman', dotClass: 'bg-emerald-500' },
+                { id: 'MENIPIS', label: 'Menipis', dotClass: 'bg-amber-500' },
+                { id: 'HABIS', label: 'Habis', dotClass: 'bg-rose-500' }
+              ] as const).map(f => (
                 <button
                   key={f.id}
                   type="button"
-                  onClick={() => setStatusFilter(f.id as any)}
-                  className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition-all border cursor-pointer whitespace-nowrap ${statusFilter === f.id
+                  onClick={() => setStatusFilter(f.id)}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-bold transition-all border cursor-pointer whitespace-nowrap ${statusFilter === f.id
                     ? 'bg-[#3B2A1F] text-[#F7F5F2] border-[#3B2A1F] shadow-sm'
                     : 'bg-stone-50 dark:bg-[#171514] text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-800 hover:border-stone-300'
                     }`}
                 >
-                  {f.label}
+                  {f.dotClass && (
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${f.dotClass}`} aria-hidden="true" />
+                  )}
+                  <span>{f.label}</span>
                 </button>
               ))}
             </div>
@@ -485,7 +685,8 @@ export const InventoryPage: React.FC = () => {
 
           {/* Table Master Bahan Baku */}
           <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm">
-            <div className="overflow-x-auto">
+            {/* Desktop & Tablet Table (>= md: 768px) */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-xs min-w-[650px]">
                 <thead className="bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider">
                   <tr>
@@ -510,20 +711,20 @@ export const InventoryPage: React.FC = () => {
                     filteredStocks.map(stk => {
                       // Status calculation
                       let statusBadge = {
-                        emoji: '🟢',
+                        dotColor: 'bg-emerald-500',
                         label: 'Aman',
                         bg: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
                       };
 
                       if (stk.current_amount <= 0) {
                         statusBadge = {
-                          emoji: '🔴',
+                          dotColor: 'bg-rose-500',
                           label: 'Habis',
                           bg: 'bg-rose-500/10 text-rose-600 border-rose-500/30'
                         };
                       } else if (stk.current_amount <= stk.min_amount) {
                         statusBadge = {
-                          emoji: '🟡',
+                          dotColor: 'bg-amber-500',
                           label: 'Menipis',
                           bg: 'bg-amber-500/10 text-amber-600 border-amber-500/30'
                         };
@@ -595,7 +796,7 @@ export const InventoryPage: React.FC = () => {
                           {/* Status */}
                           <td className="p-4">
                             <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border ${statusBadge.bg}`}>
-                              <span className="text-xs leading-none">{statusBadge.emoji}</span>
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusBadge.dotColor}`} aria-hidden="true" />
                               <span>{statusBadge.label}</span>
                             </span>
                           </td>
@@ -607,27 +808,30 @@ export const InventoryPage: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleOpenUpdateStok(stk)}
-                                  className="px-3 py-1.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-black text-xs transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"
+                                  className="px-3 py-1.5 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-black text-xs transition-colors shadow-sm cursor-pointer flex items-center gap-1.5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373]"
                                   title="Update / Sesuaikan Stok"
+                                  aria-label={`Update stok ${stk.name}`}
                                 >
-                                  <SlidersHorizontal className="w-3.5 h-3.5 text-[#D4A373]" />
+                                  <SlidersHorizontal className="w-3.5 h-3.5 text-[#D4A373]" aria-hidden="true" />
                                   Update Stok
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleOpenEditStock(stk)}
-                                  className="p-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                                  className="min-w-[32px] min-h-[32px] p-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373]"
                                   title="Edit Master Bahan"
+                                  aria-label={`Edit ${stk.name}`}
                                 >
-                                  <Edit2 className="w-4 h-4" />
+                                  <Edit2 className="w-4 h-4" aria-hidden="true" />
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setDeletingStock(stk)}
-                                  className="p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer"
+                                  className="min-w-[32px] min-h-[32px] p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-rose-500"
                                   title="Hapus Bahan Baku"
+                                  aria-label={`Hapus ${stk.name}`}
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <Trash2 className="w-4 h-4" aria-hidden="true" />
                                 </button>
                               </div>
                             ) : (
@@ -640,6 +844,150 @@ export const InventoryPage: React.FC = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile View: Inventory Material Cards (< md: 768px) */}
+            <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800/80">
+              {filteredStocks.length === 0 ? (
+                <div className="p-8 text-center text-stone-400 font-semibold">
+                  <Boxes className="w-10 h-10 mx-auto text-stone-300 dark:text-stone-700 mb-2" />
+                  <p className="text-sm font-bold text-stone-600 dark:text-stone-400">Tidak ada bahan baku ditemukan</p>
+                  <p className="text-xs text-stone-400 mt-1">Coba sesuaikan kata kunci pencarian atau filter status stok Anda.</p>
+                </div>
+              ) : (
+                filteredStocks.map(stk => {
+                  let statusBadge = {
+                    dotColor: 'bg-emerald-500',
+                    label: 'Aman',
+                    bg: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+                  };
+
+                  if (stk.current_amount <= 0) {
+                    statusBadge = {
+                      dotColor: 'bg-rose-500',
+                      label: 'Habis',
+                      bg: 'bg-rose-500/10 text-rose-600 border-rose-500/30'
+                    };
+                  } else if (stk.current_amount <= stk.min_amount) {
+                    statusBadge = {
+                      dotColor: 'bg-amber-500',
+                      label: 'Menipis',
+                      bg: 'bg-amber-500/10 text-amber-600 border-amber-500/30'
+                    };
+                  }
+
+                  const maxCapacity = Math.max(stk.min_amount * 3, stk.current_amount, 1);
+                  const percent = Math.min(100, Math.round((stk.current_amount / maxCapacity) * 100));
+
+                  return (
+                    <div key={`mobile-stock-${stk.id}`} className="p-4 space-y-3 hover:bg-stone-50/50 dark:hover:bg-[#25221F] transition-colors">
+                      {/* Header: Nama Bahan + Status Badge */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-black text-stone-900 dark:text-stone-100 text-sm break-words">
+                            {stk.name}
+                          </div>
+                          <p className="text-[11px] text-stone-400 font-medium mt-0.5">
+                            Modal: <span className="font-bold text-stone-600 dark:text-stone-300">{formatRupiah(stk.cost_per_unit)}</span> / {stk.unit}
+                            {stk.baseline_cost_per_unit !== undefined && stk.baseline_cost_per_unit > 0 ? (
+                              stk.baseline_source === 'unverified_legacy' || !stk.baseline_source ? (
+                                <span className="text-amber-500 dark:text-amber-400 font-medium ml-1 block sm:inline" title="Nilai baseline tersimpan belum diverifikasi oleh Owner">
+                                  • Baseline: {formatRupiah(stk.baseline_cost_per_unit)}/{stk.unit} (Belum terverifikasi)
+                                </span>
+                              ) : (
+                                <span className="text-stone-400 ml-1 block sm:inline">• Baseline: {formatRupiah(stk.baseline_cost_per_unit)}/{stk.unit}</span>
+                              )
+                            ) : (
+                              <span className="text-amber-500 dark:text-amber-400 font-medium ml-1 block sm:inline">• Baseline: Belum diatur</span>
+                            )}
+                          </p>
+                        </div>
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase border shrink-0 ${statusBadge.bg}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusBadge.dotColor}`} aria-hidden="true" />
+                          <span>{statusBadge.label}</span>
+                        </span>
+                      </div>
+
+                      {/* Body: Stok Saat Ini vs Batas Minimum */}
+                      <div className="grid grid-cols-2 gap-2 p-2.5 rounded-2xl bg-stone-50 dark:bg-[#171514] border border-stone-100 dark:border-stone-800/80 text-xs">
+                        <div>
+                          <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Stok Saat Ini</span>
+                          <div className="mt-0.5">
+                            <span className="font-black text-[#3B2A1F] dark:text-[#D4A373] text-base">
+                              {stk.current_amount.toLocaleString('id-ID')}
+                            </span>{' '}
+                            <span className="text-xs font-bold text-stone-500">{stk.unit}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Batas Minimum</span>
+                          <div className="mt-0.5 text-xs font-bold text-stone-600 dark:text-stone-300">
+                            ≤ <strong className="text-stone-900 dark:text-stone-200">{stk.min_amount.toLocaleString('id-ID')} {stk.unit}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Progress Bar / Level Stok */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] font-bold text-stone-400">
+                          <span>Level Stok: {percent}%</span>
+                          <span>Maks: {maxCapacity.toLocaleString('id-ID')} {stk.unit}</span>
+                        </div>
+                        <div className="w-full h-2 rounded-full bg-stone-100 dark:bg-stone-800 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${stk.current_amount <= 0
+                              ? 'bg-rose-500'
+                              : stk.current_amount <= stk.min_amount
+                                ? 'bg-amber-500'
+                                : 'bg-emerald-500'
+                              }`}
+                            style={{ width: `${percent}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Footer: Tombol Aksi */}
+                      <div className="pt-1 flex items-center justify-between gap-2 border-t border-stone-100 dark:border-stone-800/60">
+                        {isOwner ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenUpdateStok(stk)}
+                              className="flex-1 py-2 px-3 rounded-xl bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] font-black text-xs transition-colors shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                              title="Update / Sesuaikan Stok"
+                            >
+                              <SlidersHorizontal className="w-3.5 h-3.5 text-[#D4A373]" />
+                              Update Stok
+                            </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditStock(stk)}
+                                className="p-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                                title="Edit Master Bahan"
+                                aria-label={`Edit ${stk.name}`}
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDeletingStock(stk)}
+                                className="p-2 rounded-xl bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer"
+                                title="Hapus Bahan Baku"
+                                aria-label={`Hapus ${stk.name}`}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-[11px] font-bold text-stone-400 italic">Mode Kasir: Hanya Baca</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
@@ -691,9 +1039,10 @@ export const InventoryPage: React.FC = () => {
 
           {/* History Log Table */}
           <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl border border-stone-200 dark:border-stone-800 overflow-hidden shadow-sm">
-            <div className="overflow-x-auto">
+            {/* Desktop Table: scrollable with sticky header */}
+            <div className="hidden md:block overflow-x-auto max-h-[400px] overflow-y-auto">
               <table className="w-full text-left text-xs min-w-[700px]">
-                <thead className="bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider">
+                <thead className="sticky top-0 z-10 bg-stone-50 dark:bg-[#23201D] border-b border-stone-200 dark:border-stone-800 text-stone-500 font-extrabold uppercase tracking-wider">
                   <tr>
                     <th className="p-4">Tanggal & Waktu</th>
                     <th className="p-4">Nama Bahan</th>
@@ -755,10 +1104,11 @@ export const InventoryPage: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => setSelectedHistory(h)}
-                              className="p-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                              className="min-w-[32px] min-h-[32px] p-2 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373]"
                               title="Lihat Detail Riwayat"
+                              aria-label={`Lihat detail mutasi ${h.stock_name}`}
                             >
-                              <Eye className="w-4 h-4" />
+                              <Eye className="w-4 h-4" aria-hidden="true" />
                             </button>
                           </td>
                         </tr>
@@ -767,6 +1117,67 @@ export const InventoryPage: React.FC = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile Touch Cards */}
+            <div className="md:hidden divide-y divide-stone-100 dark:divide-stone-800/60">
+              {filteredHistory.length === 0 ? (
+                <div className="p-8 text-center text-stone-400 font-semibold text-xs">
+                  <History className="w-8 h-8 mx-auto text-stone-300 dark:text-stone-700 mb-2" />
+                  <p className="font-bold text-stone-600 dark:text-stone-400">Belum ada data riwayat stok</p>
+                </div>
+              ) : (
+                filteredHistory.map(h => {
+                  const isPositive = h.change_amount > 0;
+                  return (
+                    <div key={`mobile-history-${h.id}`} className="p-4 space-y-2.5 hover:bg-stone-50/50 dark:hover:bg-[#25221F] transition-colors">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-extrabold text-stone-900 dark:text-stone-100 text-sm truncate">
+                            {h.stock_name}
+                          </p>
+                          <p className="text-[11px] text-stone-400">
+                            {formatSafeDate(h.created_at)}
+                          </p>
+                        </div>
+                        <div className="shrink-0">
+                          {renderActivityBadge(h.type)}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-stone-500 font-medium">Perubahan:</span>
+                        <span className={`font-black text-sm ${isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                          {isPositive ? '+' : ''}{h.change_amount.toLocaleString('id-ID')} {h.unit}
+                        </span>
+                      </div>
+
+                      {h.reference && (
+                        <p className="text-[11px] text-stone-600 dark:text-stone-300 bg-stone-50 dark:bg-[#25221F] p-2 rounded-xl border border-stone-200/50 dark:border-stone-800/50 truncate">
+                          {h.reference}
+                        </p>
+                      )}
+
+                      <div className="pt-2 border-t border-stone-100 dark:border-stone-800/60 flex items-center justify-between gap-2">
+                        <span className="text-xs text-stone-500 font-medium flex items-center">
+                          <User className="w-3.5 h-3.5 mr-1 inline text-stone-400" />
+                          {h.user_name || 'Owner'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedHistory(h)}
+                          className="min-h-[44px] px-3.5 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 text-stone-700 dark:text-stone-300 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                          title="Lihat Detail Riwayat"
+                          aria-label={`Lihat detail mutasi ${h.stock_name}`}
+                        >
+                          <Eye className="w-4 h-4 text-[#C68B59]" />
+                          Detail
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
@@ -783,15 +1194,21 @@ export const InventoryPage: React.FC = () => {
         const isInvalidAmount = !updateAmount || updateAmount <= 0;
         const isInvalidReason = !updateReason.trim();
         const isInvalidNotes = !updateNotes.trim();
-        const isSubmitDisabled = isInvalidAmount || isNegative || isInvalidReason || isInvalidNotes;
+        const isSubmitDisabled = isUpdatingStok || isInvalidAmount || isNegative || isInvalidReason || isInvalidNotes;
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
+            <div 
+              ref={updateStokModalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="inventory-update-stok-title"
+              className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800"
+            >
               <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
                 <div>
-                  <h3 className="font-black text-base text-stone-900 dark:text-stone-100 flex items-center gap-2">
-                    <SlidersHorizontal className="w-4 h-4 text-[#D4A373]" />
+                  <h3 id="inventory-update-stok-title" className="font-black text-base text-stone-900 dark:text-stone-100 flex items-center gap-2">
+                    <SlidersHorizontal className="w-4 h-4 text-[#D4A373]" aria-hidden="true" />
                     Penyesuaian Stok Manual
                   </h3>
                   <p className="text-xs text-[#C68B59] font-extrabold mt-0.5">
@@ -800,10 +1217,12 @@ export const InventoryPage: React.FC = () => {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsUpdateStokOpen(false)}
-                  className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
+                  disabled={isUpdatingStok}
+                  onClick={() => !isUpdatingStok && setIsUpdateStokOpen(false)}
+                  aria-label="Tutup modal penyesuaian stok"
+                  className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-5 h-5" aria-hidden="true" />
                 </button>
               </div>
 
@@ -917,11 +1336,10 @@ export const InventoryPage: React.FC = () => {
                 </div>
 
                 {/* Estimate Calculation Preview */}
-                <div className={`p-3.5 rounded-2xl border flex justify-between items-center text-xs font-bold transition-colors ${
-                  isNegative
+                <div className={`p-3.5 rounded-2xl border flex justify-between items-center text-xs font-bold transition-colors ${isNegative
                     ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-300 dark:border-rose-800'
                     : 'bg-stone-100 dark:bg-[#171514] border-stone-200 dark:border-stone-800'
-                }`}>
+                  }`}>
                   <span className={isNegative ? 'text-rose-600 dark:text-rose-400 font-bold' : 'text-stone-500'}>
                     {isNegative ? 'Stok Tidak Boleh Negatif:' : 'Estimasi Stok Akhir:'}
                   </span>
@@ -938,21 +1356,21 @@ export const InventoryPage: React.FC = () => {
                 <div className="flex justify-end gap-2.5 pt-3 border-t border-stone-100 dark:border-stone-800">
                   <button
                     type="button"
-                    onClick={() => setIsUpdateStokOpen(false)}
-                    className="px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors cursor-pointer"
+                    disabled={isUpdatingStok}
+                    onClick={() => !isUpdatingStok && setIsUpdateStokOpen(false)}
+                    className="px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Batal
                   </button>
                   <button
                     type="submit"
                     disabled={isSubmitDisabled}
-                    className={`px-5 py-2.5 rounded-xl font-extrabold shadow-md transition-all ${
-                      isSubmitDisabled
+                    className={`px-5 py-2.5 rounded-xl font-extrabold shadow-md transition-all ${isSubmitDisabled
                         ? 'bg-stone-300 dark:bg-stone-800 text-stone-400 dark:text-stone-600 cursor-not-allowed shadow-none'
                         : 'bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] cursor-pointer'
-                    }`}
+                      }`}
                   >
-                    Simpan Penyesuaian
+                    {isUpdatingStok ? 'Menyimpan...' : 'Simpan Penyesuaian'}
                   </button>
                 </div>
               </form>
@@ -964,17 +1382,25 @@ export const InventoryPage: React.FC = () => {
       {/* Modal Create/Edit Master Stock Item */}
       {isStockModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800">
+          <div 
+            ref={stockModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="inventory-master-stock-title"
+            className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800"
+          >
             <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3">
-              <h3 className="font-extrabold text-base text-stone-900 dark:text-stone-100">
+              <h3 id="inventory-master-stock-title" className="font-extrabold text-base text-stone-900 dark:text-stone-100">
                 {editingStock ? 'Edit Master Bahan Baku' : 'Tambah Bahan Baku Baru'}
               </h3>
               <button
                 type="button"
-                onClick={() => setIsStockModalOpen(false)}
-                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200"
+                disabled={isSavingStock}
+                onClick={() => !isSavingStock && setIsStockModalOpen(false)}
+                aria-label="Tutup modal bahan baku"
+                className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5" aria-hidden="true" />
               </button>
             </div>
 
@@ -1064,11 +1490,10 @@ export const InventoryPage: React.FC = () => {
                     setFormError('');
                   }}
                   placeholder="Rp 0"
-                  className={`w-full px-3.5 py-2.5 rounded-xl border font-bold focus:outline-none ${
-                    !isOwner
+                  className={`w-full px-3.5 py-2.5 rounded-xl border font-bold focus:outline-none ${!isOwner
                       ? 'bg-stone-100 dark:bg-stone-800/50 border-stone-200 dark:border-stone-800 text-stone-400 cursor-not-allowed'
                       : 'bg-stone-50 dark:bg-[#171514] border border-stone-300 dark:border-stone-700'
-                  }`}
+                    }`}
                 />
                 <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-1 leading-relaxed">
                   Nilai acuan per {stockFormData.unit} yang dipakai ketika tidak ada lagi pembelian valid yang tersisa.
@@ -1156,21 +1581,22 @@ export const InventoryPage: React.FC = () => {
               <div className="flex justify-end gap-2.5 pt-3 border-t border-stone-100 dark:border-stone-800">
                 <button
                   type="button"
-                  onClick={() => setIsStockModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors"
+                  disabled={isSavingStock}
+                  onClick={() => !isSavingStock && setIsStockModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl font-bold border border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-stone-100 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={editingStock !== null && Number(stockFormData.current_amount) !== editingStock.current_amount && !editStockNotes.trim()}
+                  disabled={isSavingStock || (editingStock !== null && Number(stockFormData.current_amount) !== editingStock.current_amount && !editStockNotes.trim())}
                   className={`px-5 py-2.5 rounded-xl font-extrabold shadow-md transition-all ${
-                    editingStock !== null && Number(stockFormData.current_amount) !== editingStock.current_amount && !editStockNotes.trim()
+                    isSavingStock || (editingStock !== null && Number(stockFormData.current_amount) !== editingStock.current_amount && !editStockNotes.trim())
                       ? 'bg-stone-300 dark:bg-stone-800 text-stone-400 dark:text-stone-600 cursor-not-allowed shadow-none'
                       : 'bg-[#3B2A1F] hover:bg-[#2A1E16] text-[#F7F5F2] cursor-pointer'
                   }`}
                 >
-                  {editingStock ? 'Simpan Perubahan' : 'Tambah Bahan'}
+                  {isSavingStock ? 'Menyimpan...' : (editingStock ? 'Simpan Perubahan' : 'Tambah Bahan')}
                 </button>
               </div>
             </form>
@@ -1181,10 +1607,16 @@ export const InventoryPage: React.FC = () => {
       {/* Modal Detail Riwayat */}
       {selectedHistory && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full max-h-[90vh] flex flex-col space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800 min-w-0">
+          <div 
+            ref={historyModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="inventory-detail-history-title"
+            className="bg-white dark:bg-[#1E1C1A] rounded-3xl p-6 max-w-md w-full max-h-[90vh] flex flex-col space-y-4 shadow-2xl border border-stone-200 dark:border-stone-800 min-w-0"
+          >
             <div className="flex justify-between items-center border-b border-stone-100 dark:border-stone-800 pb-3 shrink-0">
               <div className="min-w-0 pr-2">
-                <h3 className="font-black text-base text-stone-900 dark:text-stone-100 truncate">
+                <h3 id="inventory-detail-history-title" className="font-black text-base text-stone-900 dark:text-stone-100 truncate">
                   Detail Mutasi Stok
                 </h3>
                 <p className="text-[11px] text-stone-400 font-medium">Ref ID: #{selectedHistory.id}</p>
@@ -1192,9 +1624,10 @@ export const InventoryPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setSelectedHistory(null)}
-                className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 shrink-0"
+                aria-label="Tutup detail riwayat stok"
+                className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373] shrink-0"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5" aria-hidden="true" />
               </button>
             </div>
 
@@ -1277,7 +1710,7 @@ export const InventoryPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setSelectedHistory(null)}
-                className="w-full py-2.5 rounded-xl bg-stone-200 dark:bg-stone-800 text-stone-800 dark:text-stone-200 font-extrabold text-xs hover:bg-stone-300 transition-colors"
+                className="w-full py-2.5 rounded-xl bg-stone-200 dark:bg-stone-800 text-stone-800 dark:text-stone-200 font-extrabold text-xs hover:bg-stone-300 transition-colors cursor-pointer focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#3B2A1F] dark:focus-visible:ring-[#D4A373]"
               >
                 Tutup
               </button>
